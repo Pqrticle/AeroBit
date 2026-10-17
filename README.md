@@ -1,14 +1,14 @@
 # AeroBit
 
-AeroBit is a live flight display drawn as a 256×144 LED grid in a desktop window. It pulls aircraft positions from free ADS-B feeds, works out where airline flights are going, and shows them on a satellite map. You don't need an account or an API key.
+AeroBit is a live flight display drawn as a 256×144 LED grid in a desktop window. It pulls aircraft positions from free ADS-B feeds, works out where airline flights are going, and shows them on a satellite map. No account or API key is needed.
 
 ## Modes
 
-**Radar** (the default) shows the nearest airline flight with a confirmed route: airline logo, origin and destination, distance flown and left, departure time and ETA, altitude, speed, vertical rate, heading, aircraft type, tail number and squawk, on a map with the path flown so far and the path still to fly. It's meant to answer "what's that plane overhead?"
+**Radar** (the default) shows the nearest airline flight with a confirmed route: flight number, airline name and logo, origin and destination, distance flown and left, departure time and ETA, among additional technical data, on a map with the path flown so far and the path still to fly.
 
-**Map** is a full-screen view of every aircraft in range, including small planes and helicopters, each with its recent path and heading. It doesn't need routes, so it shows everything the feed sees. Colors: blue is the flight radar mode would pick, orange is a flagged aircraft (set in `.env`), red is military.
+**Map** is a full-screen view of every aircraft in range, including small planes and helicopters, each with its recent path and heading. It doesn't need routes, so it shows everything the feed sees. Blue indicates the aircraft is the selected flight in radar mode, red is military, and a custom color set in `defaults.yml` marks a flagged aircraft.
 
-**Tracking** follows one flight anywhere in the world. Give it a flight number (`UA123`) or an ICAO callsign (`UAL123`) and it keeps the whole route in view. If the route can't be confirmed, it shows the takeoff airport and the path since, or just the aircraft itself.
+**Tracking** follows one flight anywhere in the world. Give it a flight number (`AA123`) or an ICAO callsign (`AAL123`) and it keeps the whole route in view. If the route can't be confirmed, it shows the takeoff airport and the path since, or just the aircraft itself.
 
 ## How routes are found
 
@@ -25,10 +25,10 @@ A flight shown in radar mode has passed all of this, so its route is almost alwa
 
 ## Setup
 
-You need Python 3.10 or newer (developed on 3.14).
+Requires Python 3.10 or newer (developed on 3.14).
 
 ```bash
-git clone https://github.com/<your-username>/AeroBit.git
+git clone https://github.com/Pqrticle/AeroBit.git
 ```
 
 ```bash
@@ -39,11 +39,12 @@ cd AeroBit
 pip install -r requirements.txt
 ```
 
-This installs [pygame-ce](https://pyga.me/), [requests](https://requests.readthedocs.io/) and [PyYAML](https://pyyaml.org/). pygame-ce conflicts with the original `pygame` package, so uninstall that one first if you have it. A virtual environment is a good idea but isn't required.
+This installs [pygame-ce](https://pyga.me/), [requests](https://requests.readthedocs.io/) and [PyYAML](https://pyyaml.org/). pygame-ce conflicts with the original `pygame` package, so uninstall that one first if needed. A virtual environment is a good idea but isn't required.
 
-Copy `.env.example` to `.env` and fill it in
+Rename `.env.example` to `.env` and fill it in
 
-`CENTER_COORDS` is required: the latitude and longitude, in decimal degrees, that radar and map mode center on. `FLAGGED_AIRCRAFT` is an optional comma-separated list of callsigns or tail numbers to color orange. `.env` is in `.gitignore`, so your location stays out of the repository.
+`CENTER_COORDS` is required: the latitude and longitude of a specific place (e.g., your location), in decimal degrees, that radar and map mode center on.
+`FLAGGED_AIRCRAFT` is an optional comma-separated list of callsigns or tail numbers to color separately.
 
 Startup defaults, like the radar radius and whether roads are drawn, are in `defaults.yml` (see [Settings](#settings)).
 
@@ -60,32 +61,33 @@ On the first run it downloads the OurAirports database (`airports.csv`, about 12
 ```
 python src/aerobit.py [radar | map | FLIGHT] [options]
 ```
+Commands can be entered at any time from either the command line or the display. To enter a command from the display, press `Enter` first to open the input prompt. Both methods are functionally equivalent.
 
-Give at most one mode, plus any options, in any order. If an option appears twice, the last one wins. `help` prints this list.
+Give at most one mode, plus any options, in any order. Note attributes reset to defaults when the mode is switched. The default mode is radar. `help` will print the below list.
 
 | Option | Default | Effect |
 |---|---|---|
-| `r=MILES` | 100 radar, 10 map, 1000 tracking | Map radius. The flight search reaches at most 287 miles |
-| `num_flights=N\|all` | 1 radar, all map | How many of the closest flights to show (0 shows none) |
+| `r=MILES` | 100mi radar, 10mi map, 1000mi tracking | Map radius. The flight search reaches at most 287 miles |
+| `num_flights=num\|all` | 1 radar, all map | How many of the closest flights to show (0 shows none) |
 | `airports=true\|false` | true | Radar and tracking: the route's airports. Map: every airline airport |
-| `airfields=true\|false` | false | Map only: every other airport too |
+| `airfields=true\|false` | false | Map only: every other airport without airline service |
 | `heli_only=true\|false` | false | Map: only helicopters. Radar: the selected flight plus the closest helicopters |
 | `roads=true\|false` | false | Draw roads over the satellite map |
-| `set_coords=LAT,LON` | from `.env` | Move the radar and map center until the program closes. Tracking keeps the `.env` location |
+| `set_coords=LAT,LON` | from `.env` | Move the radar and map center until the program closes. |
 
-The same commands work while it's running: press Enter and type one on the display, or type it in the terminal. A command that names a mode starts that mode fresh. Options on their own, like `r=30`, change only those settings in the current mode.
+Use the following shortcut commands from the display while it's running:
 
 | Key | Effect |
 |---|---|
 | R / M | Switch to radar / map |
-| T | Track the blue flight |
+| T | Track the selected blue flight |
 | Mouse | Hover over an aircraft to see its callsign; click it to track it |
 | F11 | Toggle full screen |
 | Esc | Cancel typing, or quit |
 
 ## Settings
 
-`defaults.yml` in the project folder holds the startup defaults. Commands override them while the program runs, and every mode command (including the R and M keys) starts again from these values. Edits to the file take effect on the next launch.
+`defaults.yml` in the project folder holds the startup defaults. Commands override them as long as the mode remains unchanged. Edits to the file take effect on the next launch.
 
 | Setting | Default | Effect |
 |---|---|---|
@@ -128,17 +130,16 @@ Less common settings are constants near the top of `src/aerobit.py`:
 
 ## Data sources
 
-| Data | Source |
+| Source | What it provides |
 |---|---|
-| Live positions and callsign search | [adsb.fi](https://adsb.fi/) open data API, with [adsb.lol](https://adsb.lol/) as a fallback |
-| Flight paths (today's trace for each aircraft) | adsb.lol, with adsb.fi as a fallback |
-| Routes | adsb.lol route database and [adsbdb](https://www.adsbdb.com/) |
-| Airline names and codes | adsbdb |
-| Airports | [OurAirports](https://ourairports.com/data/) |
-| Airline logos | Aviasales |
-| Satellite imagery and roads | Esri World Imagery and World Transportation (Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community) |
+| [adsb.fi](https://adsb.fi/) | Aircraft positions within a radius and worldwide search by callsign, with each aircraft's altitude, speed, heading, vertical rate, squawk, tail number, type and military flag; today's flight path for an aircraft |
+| [adsb.lol](https://adsb.lol/) | The same live positions, callsign search and flight paths as adsb.fi; routes for callsigns, with each leg of a multi-stop flight listed separately |
+| [adsbdb](https://www.adsbdb.com/) | The origin and destination for a callsign; airline names and two-letter codes; flight numbers turned into callsigns (UA123 → UAL123) |
+| [OurAirports](https://ourairports.com/) | Airport codes, names and locations, whether each has airline service, and the town, state or region and country it serves |
+| [Aviasales](https://www.aviasales.com/) | Airline logos |
+| [Esri](https://www.esri.com/) | Satellite imagery and the road overlay (Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community) |
 
-These are free community services. Check their terms before using AeroBit for anything beyond personal use. Airline names and logos belong to their owners; AeroBit isn't affiliated with any airline or data provider.
+All of these are free to use. Check their terms before using AeroBit for anything beyond personal use. Airline names and logos belong to their owners; AeroBit isn't affiliated with any airline or data provider.
 
 ## License
 

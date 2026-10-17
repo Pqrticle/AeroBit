@@ -121,7 +121,7 @@ def number(value):
     return value if isinstance(value, (int, float)) else None
 
 
-def parse_plane(ac, now):
+def parse_plane(ac, now, center=None):
     lat, lon, alt = ac.get("lat"), ac.get("lon"), ac.get("alt_baro")
     last = ac.get("lastPosition") or {}
     if (lat is None or lon is None) and (last.get("seen_pos") or 999) < 120:
@@ -143,7 +143,7 @@ def parse_plane(ac, now):
         "desc": ac.get("desc") or "",
         "category": ac.get("category") or "",
         "military": bool((ac.get("dbFlags") or 0) & 1) or (ac.get("flight") or "").strip().upper().startswith(MILITARY_PREFIXES),
-        "dist": distance_miles(*app.CENTER_COORDS, lat, lon),
+        "dist": distance_miles(*(center or app.CENTER_COORDS), lat, lon),
         "alt_trend": 0, "mph_trend": 0,
     }
 
@@ -197,11 +197,11 @@ def feed_get(session, urls, **fmt):
     raise ConnectionError("no flight feed responded")
 
 
-def fetch_aircraft(session, radius_miles):
+def fetch_aircraft(session, radius_miles, center=None):
     now = time.time()
-    lat, lon = app.CENTER_COORDS
+    lat, lon = center or app.CENTER_COORDS
     found = feed_get(session, FEED_URLS, lat=lat, lon=lon, dist=min(radius_miles / NM_TO_MILES, 250))
-    return sorted((p for p in (parse_plane(ac, now) for ac in found) if p), key=lambda p: p["dist"])
+    return sorted((p for p in (parse_plane(ac, now, center) for ac in found) if p), key=lambda p: p["dist"])
 
 
 AIRPORTS = []
@@ -275,7 +275,7 @@ takeoff_cache = {}  # icao24 -> (time checked, takeoff airport or None)
 departure_cache = {}  # icao24 -> wheels-up time
 
 
-def fetch_trace(session, icao24, trim_far=True):
+def fetch_trace(session, icao24, trim_far=True, center=None):
     """Also records the takeoff airport and time, which is what confirms routes."""
     for url in TRACE_URLS:
         host = url.split("/")[2]
@@ -304,7 +304,7 @@ def fetch_trace(session, icao24, trim_far=True):
         else:
             departure_cache.pop(icao24, None)
         if trim_far:
-            pts = pts[next((i for i, (lat, lon, *_) in enumerate(pts) if distance_miles(*app.CENTER_COORDS, lat, lon) < 150), len(pts)):]
+            pts = pts[next((i for i, (lat, lon, *_) in enumerate(pts) if distance_miles(*(center or app.CENTER_COORDS), lat, lon) < 150), len(pts)):]
         return pts
     takeoff_cache[icao24] = (time.time() - 3 * 3600 + 600, None)
     return []
@@ -575,7 +575,7 @@ def update_trails(session, trails, planes, view):
             if downloads >= MAX_TRACES:
                 continue
             downloads += 1
-            trail = trails[p["icao24"]] = {"pts": fetch_trace(session, p["icao24"])}
+            trail = trails[p["icao24"]] = {"pts": fetch_trace(session, p["icao24"], center=view.center)}
         trail["seen"] = now
         trail["pts"].append((p["lat"], p["lon"], now))
     for icao in [i for i, t in trails.items() if now - t["seen"] > 60]:
@@ -612,9 +612,10 @@ def render_map_mode(low, view, background, planes, trails, now, airports=(), rad
 class MapMode:
     kind = "map"
 
-    def __init__(self, session):
+    def __init__(self, session, center=None):
         self.name = "map"
-        self.view = MapView.around(pygame.Rect(0, 0, GRID_W, GRID_H), app.CENTER_COORDS, app.MAP_RADIUS_MILES)
+        self.center = center or app.CENTER_COORDS  # clicking the map moves it until the next mode switch
+        self.view = MapView.around(pygame.Rect(0, 0, GRID_W, GRID_H), self.center, app.MAP_RADIUS_MILES)
         self.radius = math.ceil(self.view.reach_miles())
         self.background = get_background(session, self.view)
         self.airports = map_airports(self.view)
@@ -625,16 +626,29 @@ class MapMode:
         import radar
 
         try:
-            fetched = fetch_aircraft(session, self.radius)
+            fetched = fetch_aircraft(session, self.radius, self.center)
             planes = [q for q in fetched if self.view.contains(q["lat"], q["lon"])
                       and (is_helicopter(q) or not app.MAP_HELI_ONLY)][:app.MAP_NUM_FLIGHTS]
             update_trails(session, self.trails, planes, self.view)
-            self.radar_pick = next((q["icao24"] for q in fetched if not q["ground"] and
-                                    q["dist"] <= app.RADAR_RADIUS_MILES and radar.qualifies(q)), None)
+            self.radar_pick = self.find_radar_pick(fetched)
             radar.update_lookups(session, planes)
             self.planes = planes
         except ConnectionError as e:
             print(e)
+
+    def find_radar_pick(self, fetched):
+        """The flight radar mode would show: the nearest qualifying one to the radar center. On a moved map it's
+        only marked if everything closer to the radar center was inside this map's search."""
+        import radar
+
+        def radar_dist(q):
+            return distance_miles(*app.CENTER_COORDS, q["lat"], q["lon"])
+        picks = [q for q in fetched if not q["ground"] and radar_dist(q) <= app.RADAR_RADIUS_MILES and radar.qualifies(q)]
+        best = min(picks, key=radar_dist, default=None)
+        searched = min(self.radius, 250 * NM_TO_MILES)
+        if best and distance_miles(*self.center, *app.CENTER_COORDS) + radar_dist(best) <= searched:
+            return best["icao24"]
+        return None
 
     def hoverable(self):
         return self.planes

@@ -4,8 +4,8 @@ import time
 import aerobit as app
 from aerobit import COLOR_AIRPORT, COLOR_CALLSIGN, COLOR_LABEL, COLOR_OFF, COLOR_TEXT, GRID_W, HOME_COORDS, clean, \
     draw_outlined_icon, draw_text_center
-from map import (PLANE_ICON, MapView, current_position, distance_miles, draw_airports, draw_dotted_path, draw_home,
-                 draw_map_base, feed_get, fetch_trace, get_background, nearest_town, parse_plane, plane_box,
+from map import (HELICOPTER_DOT, MapView, current_position, distance_miles, draw_airports, draw_dotted_path, draw_home,
+                 draw_map_base, feed_get, fetch_trace, get_background, map_icon, nearest_town, parse_plane, plane_box,
                  takeoff_airport)
 from radar import (ADSBDB_URL, PANEL, adsbdb, best_route, draw_info, flight_path, info_cache, look_up_flight,
                    lookup_routeset, near_labels, note_trends)
@@ -86,9 +86,10 @@ def draw_tracking_map(low, view, background, p, trail, now):
     info = best_route(p)
     took_off = takeoff_airport(p["icao24"])
     route_airports = [] if not app.SHOW_AIRPORTS else [info["orig"], info["dest"]] if info else [took_off] if took_off else []
-    draw_airports(low, view, (), [plane_box(view, p, now)], route_airports)
+    icon = map_icon(p)
+    draw_airports(low, view, (), [plane_box(view, p, now, icon)], route_airports)
     px, py = (round(v) for v in view.project(*current_position(p, now)))
-    draw_outlined_icon(low, PLANE_ICON, px, py, (p["track"] or 0) - 90, COLOR_AIRPORT)
+    draw_outlined_icon(low, icon, px, py, 0 if icon is HELICOPTER_DOT else (p["track"] or 0) - 90, COLOR_AIRPORT)
     low.set_clip(None)
 
 

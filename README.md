@@ -73,7 +73,7 @@ Give at most one mode, plus any options, in any order. Note attributes reset to 
 | `airfields=true\|false` | false | Map only: every other airport without airline service |
 | `heli_only=true\|false` | false | Map: only helicopters. Radar: the selected flight plus the closest helicopters |
 | `roads=true\|false` | false | Draw roads over the satellite map |
-| `set_coords=LAT,LON` | from `.env` | Move the radar and map center until the program closes. |
+| `set_coords=LAT,LON` | from `.env` | Move the radar and map center until the program closes, and uniquely **persists** between modes. |
 
 Use the following shortcut commands from the display while it's running:
 
@@ -81,7 +81,7 @@ Use the following shortcut commands from the display while it's running:
 |---|---|
 | R / M | Switch to radar / map |
 | T | Track the selected blue flight |
-| Mouse | Hover over an aircraft to see its callsign; click it to track it |
+| Mouse | Hover over an aircraft to see its callsign; click on an aircraft to track it; click on any terrain in map mode to temporarily set a new center (reverts when switching modes, unlike the `set_coords` command) |
 | F11 | Toggle full screen |
 | Esc | Cancel typing, or quit |
 

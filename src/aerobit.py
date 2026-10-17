@@ -242,11 +242,11 @@ import radar
 import track
 
 
-def make_mode(session, name):
+def make_mode(session, name, center=None):
     if name == "radar":
         mode = radar.RadarMode(session)
     elif name == "map":
-        mode = mapmode.MapMode(session)
+        mode = mapmode.MapMode(session, center)
     else:
         mode = track.TrackMode(session, name)
     mode.last_fetch = 0.0
@@ -366,17 +366,20 @@ def run_command(session, text, current):
         if w.lower().endswith(".py"):
             words = words[i + 1:]
             break
+    center = None
     try:
         mode, settings = parse_command(words)
         if mode is None:
             mode = current.name
             settings = parse_command(words, {name: globals()[name] for name in OPTION_SETTINGS})[1]
+            if current.kind == "map" and "CENTER_COORDS" not in settings:
+                center = current.center  # options alone keep a map moved by clicking
     except ValueError as e:
         return str(e)
     if mode == "help":
         return "RADAR/MAP/FLIGHT R= ROADS= NUM_FLIGHTS="
     globals().update(settings)
-    return make_mode(session, mode)
+    return make_mode(session, mode, center)
 
 
 def describe(mode):
@@ -513,11 +516,16 @@ def main(mode="radar"):
             elif event.type == pygame.MOUSEMOTION:
                 last_mouse = time.time()
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and typing is None and current.kind != "track":
-                found = plane_at(current, ((event.pos[0] - ox) // dot, (event.pos[1] - oy) // dot))
+                led = ((event.pos[0] - ox) // dot, (event.pos[1] - oy) // dot)
+                found = plane_at(current, led)
                 if found and found[0]["callsign"]:
                     commands.put(found[0]["callsign"])
                 elif found:
                     print("That aircraft isn't broadcasting a flight number, so it can't be tracked")
+                elif current.kind == "map" and current.view.inner.collidepoint(led):
+                    lat, lon = current.view.unproject(*led)
+                    current, message, last_scene = make_mode(session, "map", (lat, lon)), "", 0.0
+                    print(f"Map centered on {lat:.4f}, {lon:.4f}")
             elif event.type == pygame.KEYDOWN and typing is not None:
                 if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                     commands.put(typing)

@@ -280,7 +280,8 @@ def draw_hover(low, mode, point):
 
 
 USAGE = f"""usage: python src/aerobit.py [radar | map | FLIGHT] [r=RADIUS] [airports=true|false] [airfields=true|false]
-                           [num_flights=N] [heli_only=true|false] [roads=true|false] [set_coords=LAT,LON]
+                           [num_flights=N] [heli_only=true|false] [roads=true|false]
+                           [set_coords=LAT,LON] [recenter [set|default]]
   radar      (the default) nearest airline flight with a confirmed route
   map        every plane and helicopter nearby, full screen
   FLIGHT     track one flight anywhere, e.g. UAL123 or UA123
@@ -294,6 +295,8 @@ USAGE = f"""usage: python src/aerobit.py [radar | map | FLIGHT] [r=RADIUS] [airp
   roads=     draw roads on the satellite map (default: false)
   set_coords= radar and map: move the center to LAT,LON until the program closes
              (default: CENTER_COORDS from .env; tracking mode always uses .env)
+  recenter, recenter set  radar and map: back to the last set_coords center (or .env), undoing a clicked map center
+  recenter default        radar and map: back to the .env center, undoing set_coords too
 While running: press Enter in the display (or type in this terminal) to give a new command; R = radar, M = map,
 T = track the blue flight (radar and map mode).
 A command naming a mode starts it fresh; options alone (like r=30) change only those in the current mode."""
@@ -307,13 +310,21 @@ DEFAULTS = {name: globals()[name] for name in OPTION_SETTINGS}
 def parse_command(args, base=None):
     """Returns (mode, settings) for a command; raises ValueError on mistakes."""
     mode, settings = None, dict(base or DEFAULTS)
-    args = " ".join(args).replace(", ", ",").replace(" ,", ",").split()
-    for arg in args:
+    words = []
+    for w in " ".join(args).replace(", ", ",").replace(" ,", ",").split():
+        if words and words[-1].lower() == "recenter" and w.lower() in ("set", "default"):
+            words[-1] += " " + w  # "recenter set" and "recenter default" are one option
+        else:
+            words.append(w)
+    for arg in words:
         key, has_value, value = arg.partition("=")
         key, value = key.lower(), value.lower()
         if not has_value:
             if key in ("help", "-h", "--help", "/?"):
                 return "help", settings
+            if key in ("recenter", "recenter set", "recenter default"):  # the last set_coords center, or .env
+                settings["CENTER_COORDS"] = HOME_COORDS if key == "recenter default" else CENTER_COORDS
+                continue
             if mode:
                 raise ValueError("Only one mode or flight at a time")
             mode = key if key in ("radar", "map") else arg
@@ -376,6 +387,8 @@ def run_command(session, text, current):
         return str(e)
     if mode == "help":
         return "RADAR/MAP/FLIGHT R= ROADS= NUM_FLIGHTS="
+    if "recenter" in (w.lower() for w in words) and mode not in ("radar", "map"):
+        return "recenter only works in radar and map"
     globals().update(settings)
     return make_mode(session, mode, center)
 

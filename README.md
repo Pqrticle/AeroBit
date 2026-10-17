@@ -74,6 +74,7 @@ Give at most one mode, plus any options, in any order. Note attributes reset to 
 | `heli_only=true\|false` | false | Map: only helicopters. Radar: the selected flight plus the closest helicopters |
 | `roads=true\|false` | false | Draw roads over the satellite map |
 | `set_coords=LAT,LON` | from `.env` | Move the radar and map center until the program closes, and uniquely **persists** between modes. |
+| `recenter set\|default` | | Radar and map: `set` (or no argument) goes back to the last `set_coords` center, undoing a clicked map center; `default` goes back to the `.env` center, undoing `set_coords` too |
 
 Use the following shortcut commands from the display while it's running:
 

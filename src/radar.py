@@ -4,9 +4,10 @@ import time
 import pygame
 
 import aerobit as app
-from aerobit import (COLOR_AIRPORT, COLOR_CALLSIGN, COLOR_DOWN, COLOR_EXTRA, COLOR_LABEL, COLOR_LINE, COLOR_OFF,
-                     COLOR_TEXT, COLOR_UP, ETA_BUFFER_MINUTES, GLYPHS, GRID_H, GRID_W, MAX_LOOKUPS, MAX_TRACES, clean,
-                     draw_icon, draw_outlined_icon, draw_text, draw_text_center, draw_text_right, fit, text_width)
+from aerobit import (COLOR_AIRPORT, COLOR_CALLSIGN, COLOR_DOWN, COLOR_EMERGENCY, COLOR_EXTRA, COLOR_LABEL,
+                     COLOR_LINE, COLOR_OFF, COLOR_TEXT, COLOR_UP, ETA_BUFFER_MINUTES, GLYPHS, GRID_H, GRID_W,
+                     MAX_LOOKUPS, MAX_TRACES, clean, draw_icon, draw_outlined_icon, draw_text, draw_text_center,
+                     draw_text_right, fit, text_width)
 from map import (HELICOPTER_DOT, PLANE_ICON, MapView, aircraft_color, bearing, current_position, departure_cache,
                  distance_miles, draw_airports, draw_dotted_path, draw_home, draw_map_base, feed_failed,
                  fetch_aircraft, fetch_trace, get_background, get_politely, great_circle, is_candidate,
@@ -435,7 +436,7 @@ def draw_data(low, p, now):
         ("HEADING", f"{p['track']:.0f} {compass(p['track'])}" if p["track"] is not None else "---", COLOR_TEXT),
         ("AIRCRAFT", short_aircraft(p), COLOR_TEXT),
         ("TAIL NO.", fit(p["reg"], 10) or "---", COLOR_TEXT),
-        ("SQUAWK", p["squawk"] or "---", COLOR_TEXT),
+        ("SQUAWK", p["squawk"] or "---", COLOR_EMERGENCY if p["squawk"] in ("7500", "7600", "7700", "7777") else COLOR_TEXT),
     ]
     for i, (label, value, color) in enumerate(rows):
         draw_text(low, label, 2, 77 + i * 9, COLOR_LABEL)

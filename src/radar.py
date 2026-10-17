@@ -271,21 +271,29 @@ def draw_header(low, p, count, tracking=False, near=None):
         draw_text_center(low, p["callsign"][:3], 1 + LOGO_H // 2, 14, COLOR_TEXT)
         text_x = 38
 
-    labels = ["TRACKING"] if tracking else [f"{count} FLIGHT{'S' if count != 1 else ''}", f"({app.RADAR_RADIUS_MILES:g}MI RADIUS)"]
     dist = f"{p['dist']:.1f}MI" if p["dist"] < 100 else f"{p['dist']:,.0f}MI"
-    block_left = GRID_W - 2 - max([text_width(dist, 2)] + [text_width(t) for t in labels])
-    for i, t in enumerate(labels):
-        draw_text_right(low, t, GRID_W - 2, 3 + i * 8, COLOR_LABEL)
-    draw_text_right(low, dist, GRID_W - 2, 20, COLOR_TEXT, 2)
+    if tracking:  # the flight number is always scale 3; a distance too wide beside it goes small, below it
+        scale = 3
+        right = text_x + text_width(p["callsign"], scale) + 4
+        draw_text_right(low, "TRACKING", GRID_W - 2, 3, COLOR_LABEL)
+        big = GRID_W - 2 - text_width(dist, 2) >= right
+        draw_text_right(low, dist, GRID_W - 2, 20 if big else 27, COLOR_TEXT, 2 if big else 1)
+        block_left = GRID_W - 2 - text_width(dist, 2 if big else 1)
+    else:
+        labels = [f"{count} FLIGHT{'S' if count != 1 else ''}", f"({app.RADAR_RADIUS_MILES:g}MI RADIUS)"]
+        block_left = GRID_W - 2 - max([text_width(dist, 2)] + [text_width(t) for t in labels])
+        for i, t in enumerate(labels):
+            draw_text_right(low, t, GRID_W - 2, 3 + i * 8, COLOR_LABEL)
+        draw_text_right(low, dist, GRID_W - 2, 20, COLOR_TEXT, 2)
+        scale = next((s for s in (4, 3) if text_x + text_width(p["callsign"], s) <= block_left - 4), 2)
+        right = text_x + text_width(p["callsign"], scale) + 4
 
-    scale = next((s for s in (4, 3) if text_x + text_width(p["callsign"], s) <= block_left - 4), 2)
     color = (alert_color(p) if tracking else None) or COLOR_CALLSIGN
     draw_text(low, p["callsign"], text_x, 3, color, scale, [3] * 7)
     sub = info.get("airline") or p["callsign"][:3]
     draw_text(low, fit(sub, (block_left - 6 - text_x) // 6), text_x, 25, COLOR_TEXT, 1, [1, 1, 2, 1, 2, 1, 1])
     if near:  # the first label that fits beside the flight number, between TRACKING and the distance
-        width = GRID_W - 2 - (text_x + text_width(p["callsign"], scale) + 4)
-        text = next((t for t in near if text_width(t) <= width), None)
+        text = next((t for t in near if text_width(t) <= GRID_W - 2 - right), None)
         if text:
             draw_text_right(low, text, GRID_W - 2, 11, COLOR_LABEL)
         return text

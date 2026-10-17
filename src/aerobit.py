@@ -314,8 +314,6 @@ def parse_command(args, base=None):
         if not has_value:
             if key in ("help", "-h", "--help", "/?"):
                 return "help", settings
-            if key.isdigit():
-                raise ValueError(f"Write it as num_flights={key}")
             if mode:
                 raise ValueError("Only one mode or flight at a time")
             mode = key if key in ("radar", "map") else arg
@@ -519,7 +517,7 @@ def main(mode="radar"):
                 led = ((event.pos[0] - ox) // dot, (event.pos[1] - oy) // dot)
                 found = plane_at(current, led)
                 if found and found[0]["callsign"]:
-                    commands.put(found[0]["callsign"])
+                    commands.put(("track", found[0]["callsign"]))
                 elif found:
                     print("That aircraft isn't broadcasting a flight number, so it can't be tracked")
                 elif current.kind == "map" and current.view.inner.collidepoint(led):
@@ -551,13 +549,18 @@ def main(mode="radar"):
                 elif event.key == pygame.K_t:
                     target = current.blue_flight()
                     if target:
-                        commands.put(target["callsign"])
+                        commands.put(("track", target["callsign"]))
 
         while not commands.empty():
-            text = commands.get().strip()
-            if not text:
-                continue
-            result = run_command(session, text, current)
+            item = commands.get()
+            if isinstance(item, tuple):  # a clicked or T-key aircraft: its callsign isn't parsed as a command
+                globals().update(DEFAULTS)
+                result = make_mode(session, item[1])
+            else:
+                text = item.strip()
+                if not text:
+                    continue
+                result = run_command(session, text, current)
             if isinstance(result, str):
                 print(result)
                 message, message_until = result, time.time() + 6

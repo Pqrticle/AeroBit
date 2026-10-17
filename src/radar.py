@@ -8,10 +8,10 @@ from aerobit import (COLOR_AIRPORT, COLOR_CALLSIGN, COLOR_DOWN, COLOR_EMERGENCY,
                      COLOR_LINE, COLOR_OFF, COLOR_TEXT, COLOR_UP, ETA_BUFFER_MINUTES, GLYPHS, GRID_H, GRID_W,
                      MAX_LOOKUPS, MAX_TRACES, clean, draw_icon, draw_outlined_icon, draw_text, draw_text_center,
                      draw_text_right, fit, text_width)
-from map import (HELICOPTER_DOT, PLANE_ICON, MapView, aircraft_color, bearing, current_position, departure_cache,
-                 distance_miles, draw_airports, draw_dotted_path, draw_home, draw_map_base, feed_failed,
-                 fetch_aircraft, fetch_trace, get_background, get_politely, great_circle, is_candidate,
-                 is_helicopter, plane_box, renamed, takeoff_airport, takeoff_checked)
+from map import (HELICOPTER_DOT, PLANE_ICON, MapView, aircraft_color, alert_color, bearing, current_position,
+                 departure_cache, distance_miles, draw_airports, draw_dotted_path, draw_home, draw_map_base,
+                 feed_failed, fetch_aircraft, fetch_trace, get_background, get_politely, great_circle,
+                 is_candidate, is_helicopter, plane_box, renamed, takeoff_airport, takeoff_checked)
 
 ADSBDB_URL = "https://api.adsbdb.com/v0/"
 ROUTESET_URL = "https://api.adsb.lol/api/0/routeset"
@@ -279,7 +279,8 @@ def draw_header(low, p, count, tracking=False, near=None):
     draw_text_right(low, dist, GRID_W - 2, 20, COLOR_TEXT, 2)
 
     scale = next((s for s in (4, 3) if text_x + text_width(p["callsign"], s) <= block_left - 4), 2)
-    draw_text(low, p["callsign"], text_x, 3, COLOR_CALLSIGN, scale, [3] * 7)
+    color = (alert_color(p) if tracking else None) or COLOR_CALLSIGN
+    draw_text(low, p["callsign"], text_x, 3, color, scale, [3] * 7)
     sub = info.get("airline") or p["callsign"][:3]
     draw_text(low, fit(sub, (block_left - 6 - text_x) // 6), text_x, 25, COLOR_TEXT, 1, [1, 1, 2, 1, 2, 1, 1])
     if near:  # the first label that fits beside the flight number, between TRACKING and the distance

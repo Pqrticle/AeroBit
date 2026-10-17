@@ -338,9 +338,13 @@ def is_large(p):
     return p["category"] in ("A3", "A4", "A5") if p["category"] else is_candidate(p["callsign"])
 
 
+def alert_color(p):
+    """The flagged or military color, or None for other aircraft."""
+    return COLOR_FLAGGED_AIRCRAFT if is_flagged_aircraft(p) else COLOR_MILITARY if p["military"] else None
+
+
 def aircraft_color(p, radar_flight=False):
-    return (COLOR_FLAGGED_AIRCRAFT if is_flagged_aircraft(p) else COLOR_MILITARY if p["military"]
-            else COLOR_AIRPORT if radar_flight else COLOR_TEXT)
+    return alert_color(p) or (COLOR_AIRPORT if radar_flight else COLOR_TEXT)
 
 
 def map_icon(p):

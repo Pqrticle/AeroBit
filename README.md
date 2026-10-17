@@ -133,12 +133,12 @@ Less common settings are constants near the top of `src/aerobit.py`:
 
 | Source | What it provides |
 |---|---|
-| [adsb.fi](https://adsb.fi/) | Aircraft positions within a radius and worldwide search by callsign, with each aircraft's altitude, speed, heading, vertical rate, squawk, tail number, type and military flag; today's flight path for an aircraft |
-| [adsb.lol](https://adsb.lol/) | The same live positions, callsign search and flight paths as adsb.fi; routes for callsigns, with each leg of a multi-stop flight listed separately |
-| [adsbdb](https://www.adsbdb.com/) | The origin and destination for a callsign; airline names and two-letter codes; flight numbers turned into callsigns (UA123 → UAL123) |
-| [OurAirports](https://ourairports.com/) | Airport codes, names and locations, whether each has airline service, and the town, state or region and country it serves |
-| [Aviasales](https://www.aviasales.com/) | Airline logos |
-| [Esri](https://www.esri.com/) | Satellite imagery and the road overlay (Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community) |
+| [adsb.fi](https://adsb.fi/) | The main live feed: every aircraft within a radius (radar and map) and worldwide search by callsign (tracking), each with its position, altitude, speed, heading, vertical rate, squawk, tail number, aircraft type and military flag |
+| [adsb.lol](https://adsb.lol/) | The backup live feed when adsb.fi doesn't answer; the only source of flight paths (each aircraft's recorded positions today, which show where and when it took off); and a route database that lists each leg of multi-stop flights |
+| [adsbdb](https://www.adsbdb.com/) | A second route database (origin and destination for a callsign), airline names and two-letter codes (used to find logos), and flight numbers turned into callsigns (AA123 → AAL123) |
+| [Aviasales](https://www.aviasales.com/) | Airline logos, by two-letter airline code |
+| [OurAirports](https://ourairports.com/) | The airport list, downloaded once a month: codes, names, locations, size, whether each has airline service, and the town, state or region and country it serves |
+| [Esri](https://www.esri.com/) | Satellite imagery behind every map and the optional road overlay |
 
 All of these are free to use. Check their terms before using AeroBit for anything beyond personal use. Airline names and logos belong to their owners; AeroBit isn't affiliated with any airline or data provider.
 

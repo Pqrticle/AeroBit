@@ -20,10 +20,7 @@ FEED_URLS = [  # adsb.fi first: adsb.lol is often overloaded
     "https://opendata.adsb.fi/api/v2/lat/{lat}/lon/{lon}/dist/{dist}",
     "https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{dist}",
 ]
-TRACE_URLS = [
-    "https://adsb.lol/data/traces/{folder}/trace_full_{hex}.json",
-    "https://globe.adsb.fi/data/traces/{folder}/trace_full_{hex}.json",
-]
+TRACE_URL = "https://adsb.lol/data/traces/{folder}/trace_full_{hex}.json"  # adsb.fi has no flight-path API
 AIRPORTS_URL = "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/airports.csv"
 AIRPORTS_FILE = os.path.join(ROOT, "airports.csv")
 TILE_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
@@ -277,37 +274,34 @@ departure_cache = {}  # icao24 -> wheels-up time
 
 def fetch_trace(session, icao24, trim_far=True, center=None):
     """Also records the takeoff airport and time, which is what confirms routes."""
-    for url in TRACE_URLS:
-        host = url.split("/")[2]
-        try:
-            resp = get_politely(session, url.format(folder=icao24[-2:], hex=icao24))
-            if resp is None:
-                continue
-            data = resp.content
-            body = json.loads(gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data)
-            start, rows = body["timestamp"], body["trace"]
-        except Exception as e:
-            feed_failed(host, f"flight path unavailable ({e})")
-            continue
-        pts = []
-        for row in rows:
-            t = start + row[0]
-            if pts and ((row[6] or 0) & 2 or t - pts[-1][2] > 1200):
-                pts = []  # a new flight or a 20-minute gap
-            if row[1] is not None and row[2] is not None:
-                pts.append((row[1], row[2], t, row[3]))
-        first_alt = pts[0][3] if pts else None
-        took_off = first_alt == "ground" or (isinstance(first_alt, (int, float)) and first_alt < 2500)
-        takeoff_cache[icao24] = (time.time(), nearest_airport(pts[0][:2], TAKEOFF_AIRPORT_MILES) if took_off else None)
-        if took_off:
-            departure_cache[icao24] = next((t for _, _, t, alt in pts if alt != "ground"), None)
-        else:
-            departure_cache.pop(icao24, None)
-        if trim_far:
-            pts = pts[next((i for i, (lat, lon, *_) in enumerate(pts) if distance_miles(*(center or app.CENTER_COORDS), lat, lon) < 150), len(pts)):]
-        return pts
-    takeoff_cache[icao24] = (time.time() - 3 * 3600 + 600, None)
-    return []
+    try:
+        resp = get_politely(session, TRACE_URL.format(folder=icao24[-2:], hex=icao24))
+        if resp is None:
+            raise ConnectionError("paused after being rate limited")
+        data = resp.content
+        body = json.loads(gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data)
+        start, rows = body["timestamp"], body["trace"]
+    except Exception as e:
+        feed_failed(TRACE_URL.split("/")[2], f"flight path unavailable ({e})")
+        takeoff_cache[icao24] = (time.time() - 3 * 3600 + 600, None)  # try again in 10 minutes
+        return []
+    pts = []
+    for row in rows:
+        t = start + row[0]
+        if pts and ((row[6] or 0) & 2 or t - pts[-1][2] > 1200):
+            pts = []  # a new flight or a 20-minute gap
+        if row[1] is not None and row[2] is not None:
+            pts.append((row[1], row[2], t, row[3]))
+    first_alt = pts[0][3] if pts else None
+    took_off = first_alt == "ground" or (isinstance(first_alt, (int, float)) and first_alt < 2500)
+    takeoff_cache[icao24] = (time.time(), nearest_airport(pts[0][:2], TAKEOFF_AIRPORT_MILES) if took_off else None)
+    if took_off:
+        departure_cache[icao24] = next((t for _, _, t, alt in pts if alt != "ground"), None)
+    else:
+        departure_cache.pop(icao24, None)
+    if trim_far:
+        pts = pts[next((i for i, (lat, lon, *_) in enumerate(pts) if distance_miles(*(center or app.CENTER_COORDS), lat, lon) < 150), len(pts)):]
+    return pts
 
 
 def takeoff_airport(icao24):

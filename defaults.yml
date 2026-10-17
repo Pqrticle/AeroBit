@@ -1,0 +1,11 @@
+# Default values take effect on startup and after each mode switch.
+
+radar_radius_miles: 100     # max 287
+map_radius_miles: 10
+satellite_map: true         # false shows a plain grid
+show_airports: true         # radar and tracking: the route's airports; map: every airline airport
+map_show_airfields: false   # map: airports without airline service
+map_heli_only: false        # map: show only helicopters; radar: will never only show helicopters by default
+show_roads: false
+start_fullscreen: false
+color_flagged_aircraft: [255, 150, 0]   # RGB

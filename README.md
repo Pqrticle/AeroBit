@@ -8,7 +8,11 @@ AeroBit is a live flight display drawn as a 256×144 LED grid in a desktop windo
 
 **Map** is a full-screen view of every aircraft in range, including small planes and helicopters, each with its recent path and heading. It doesn't need routes, so it shows everything the feed sees. Blue indicates the aircraft is the selected flight in radar mode, red is military, and a custom color set in `defaults.yml` marks a flagged aircraft.
 
-**Tracking** follows one flight anywhere in the world. Give it a flight number (`AA123`) or an ICAO callsign (`AAL123`) and it keeps the whole route in view. If the route can't be confirmed, it shows the takeoff airport and the path since, or just the aircraft itself.
+**Clock** shows the time and date at your `.env` location (its own time zone, whatever your computer's is) over a sky that follows the sun there: sunrise, day, sunset or night. A row of small dots along the top has one per aircraft on the default map: white, red for military, or the flagged color. Press C or type `clock`.
+
+`clock set TIME` starts a timer, written as days:hours:minutes:seconds with only the parts you need: `clock set 30` is 30 seconds, `clock set 1:30` is a minute and a half, `clock set 2:00:00` is two hours. The countdown appears under the time with a plane flying from start to finish, and blinks 0:00 for 10 seconds when it ends. It keeps running in other modes, a new one replaces it, and `clock cancel` stops it and goes back to the plain clock.
+
+**Tracking** follows one flight anywhere in the world. Give it a flight number (`track AA123`) or an ICAO callsign (`track AAL123`) and it keeps the whole route in view. If the route can't be confirmed, it shows the takeoff airport and the path since, or just the aircraft itself.
 
 ## How routes are found
 
@@ -39,7 +43,7 @@ cd AeroBit
 pip install -r requirements.txt
 ```
 
-This installs [pygame-ce](https://pyga.me/), [requests](https://requests.readthedocs.io/) and [PyYAML](https://pyyaml.org/). pygame-ce conflicts with the original `pygame` package, so uninstall that one first if needed. A virtual environment is a good idea but isn't required.
+This installs [pygame-ce](https://pyga.me/), [requests](https://requests.readthedocs.io/), [PyYAML](https://pyyaml.org/), and [timezonefinder](https://github.com/jannikmi/timezonefinder) with [tzdata](https://pypi.org/project/tzdata/) for the clock's time zone. pygame-ce conflicts with the original `pygame` package, so uninstall that one first if needed. A virtual environment is a good idea but isn't required.
 
 Rename `.env.example` to `.env` and fill it in
 
@@ -59,7 +63,7 @@ On the first run it downloads the OurAirports database (`airports.csv`, about 12
 ## Commands
 
 ```
-python src/aerobit.py [radar | map | FLIGHT] [options]
+python src/aerobit.py [radar | map | clock | track FLIGHT] [options]
 ```
 Commands can be entered at any time from either the command line or the display. To enter a command from the display, press `Enter` first to open the input prompt. Both methods are functionally equivalent.
 
@@ -75,12 +79,14 @@ Give at most one mode, plus any options, in any order. Note attributes reset to 
 | `roads=true\|false` | false | Draw roads over the satellite map |
 | `set_coords=LAT,LON` | from `.env` | Move the radar and map center until the program closes, and uniquely **persists** between modes. |
 | `recenter set\|default` | | Radar and map: `set` (or no argument) goes back to the last `set_coords` center, undoing a clicked map center; `default` goes back to the `.env` center, undoing `set_coords` too |
+| `clock set TIME` | | Start a timer, like `30`, `1:30` or `1:00:00:00` (days:hours:minutes:seconds) |
+| `clock cancel` | | Stop the timer and go back to the plain clock |
 
 Use the following shortcut commands from the display while it's running:
 
 | Key | Effect |
 |---|---|
-| R / M | Switch to radar / map |
+| R / M / C | Switch to radar / map / clock |
 | T | Track the selected blue flight |
 | Mouse | Hover over an aircraft to see its callsign; click on an aircraft to track it; click on any terrain in map mode to temporarily set a new center (reverts when switching modes, unlike the `set_coords` command) |
 | F11 | Toggle full screen |

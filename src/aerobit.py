@@ -238,6 +238,7 @@ def draw_outlined_icon(surf, rows, cx, cy, angle_deg, color):
 
 
 # The modes import the settings and helpers above, so they come after them
+import clock
 import map as mapmode
 import radar
 import track
@@ -248,6 +249,8 @@ def make_mode(session, name, center=None):
         mode = radar.RadarMode(session)
     elif name == "map":
         mode = mapmode.MapMode(session, center)
+    elif name == "clock":
+        mode = clock.ClockMode(session)
     else:
         mode = track.TrackMode(session, name)
     mode.last_fetch = 0.0
@@ -280,12 +283,15 @@ def draw_hover(low, mode, point):
         draw_text_outlined(low, text, tx, ty, COLOR_CALLSIGN)
 
 
-USAGE = f"""usage: python src/aerobit.py [radar | map | FLIGHT] [r=RADIUS] [airports=true|false] [airfields=true|false]
+USAGE = f"""usage: python src/aerobit.py [radar | map | clock | track FLIGHT] [r=RADIUS] [airports=true|false] [airfields=true|false]
                            [num_flights=N] [heli_only=true|false] [roads=true|false]
-                           [set_coords=LAT,LON] [recenter [set|default]]
+                           [set_coords=LAT,LON] [recenter [set|default]] [clock set TIME | clock cancel]
   radar      (the default) nearest airline flight with a confirmed route
   map        every plane and helicopter nearby, full screen
-  FLIGHT     track one flight anywhere, e.g. UAL123 or UA123
+  clock      the time and date at the .env location, with a dot for each aircraft on the default map
+  clock set  a timer, as days:hours:minutes:seconds; type only what you need (30 = 30 s, 1:30 = 1 min 30 s);
+  clock cancel  stop the timer and go back to the plain clock
+  track FLIGHT  track one flight anywhere, e.g. track UAL123 or track UA123
   r=         map radius in miles (defaults: {RADAR_RADIUS_MILES:g} radar, {MAP_RADIUS_MILES:g} map, {TRACK_NO_ROUTE_RADIUS_MILES:g} tracking without a route)
   airports=  radar/tracking: show the route's departure and arrival airports; map: show every airline airport
              (default: true)
@@ -299,7 +305,7 @@ USAGE = f"""usage: python src/aerobit.py [radar | map | FLIGHT] [r=RADIUS] [airp
   recenter, recenter set  radar and map: back to the last set_coords center (or .env), undoing a clicked map center
   recenter default        radar and map: back to the .env center, undoing set_coords too
 While running: press Enter in the display (or type in this terminal) to give a new command; R = radar, M = map,
-T = track the blue flight (radar and map mode).
+C = clock, T = track the blue flight (radar and map mode).
 A command naming a mode starts it fresh; options alone (like r=30) change only those in the current mode."""
 
 OPTION_SETTINGS = ("RADAR_RADIUS_MILES", "MAP_RADIUS_MILES", "TRACK_NO_ROUTE_RADIUS_MILES", "SHOW_AIRPORTS",
@@ -315,6 +321,9 @@ def parse_command(args, base=None):
     for w in " ".join(args).replace(", ", ",").replace(" ,", ",").split():
         if words and words[-1].lower() == "recenter" and w.lower() in ("set", "default"):
             words[-1] += " " + w  # "recenter set" and "recenter default" are one option
+        elif words and (words[-1].lower() == "clock" and w.lower() in ("set", "cancel")
+                        or words[-1].lower() in ("clock set", "track")):
+            words[-1] += " " + w  # "clock set 1:30", "clock cancel" and "track UAL123" are one command
         else:
             words.append(w)
     for arg in words:
@@ -328,7 +337,20 @@ def parse_command(args, base=None):
                 continue
             if mode:
                 raise ValueError("Only one mode or flight at a time")
-            mode = key if key in ("radar", "map") else arg
+            if key.startswith("clock set"):
+                settings["TIMER_SECONDS"] = parse_duration(key[9:].strip())
+                key = "clock"
+            elif key == "clock cancel":
+                settings["TIMER_SECONDS"] = 0
+                key = "clock"
+            if key == "track":
+                raise ValueError("track needs a flight, like track UAL123")
+            if key.startswith("track "):
+                mode = arg[6:].strip()
+            elif key in ("radar", "map", "clock"):
+                mode = key
+            else:
+                raise ValueError(f"Unknown command {arg}")
         elif key in ("r", "radius"):
             try:
                 r = float(value)
@@ -369,6 +391,21 @@ def parse_command(args, base=None):
     return mode, settings
 
 
+def parse_duration(text):
+    """Seconds in days:hours:minutes:seconds, filled from the right: 30, 1:30, 2:00:00, 1:00:00:00."""
+    parts = text.split(":")
+    if not text or len(parts) > 4 or not all(p.isdigit() for p in parts):
+        raise ValueError("clock set needs a time like 30, 1:30 or 1:00:00")
+    return sum(int(p) * unit for p, unit in zip(reversed(parts), (1, 60, 3600, 86400)))
+
+
+def apply_settings(settings):
+    seconds = settings.pop("TIMER_SECONDS", None)
+    if seconds is not None:
+        clock.set_timer(seconds)
+    globals().update(settings)
+
+
 def run_command(session, text, current):
     """Returns the new mode, or an error message."""
     words = text.split()
@@ -387,14 +424,16 @@ def run_command(session, text, current):
     except ValueError as e:
         return str(e)
     if mode == "help":
-        return "RADAR/MAP/FLIGHT R= ROADS= NUM_FLIGHTS="
+        return "RADAR/MAP/CLOCK/TRACK R= ROADS= NUM_FLIGHTS="
     if "recenter" in (w.lower() for w in words) and mode not in ("radar", "map"):
         return "recenter only works in radar and map"
-    globals().update(settings)
+    apply_settings(settings)
     return make_mode(session, mode, center)
 
 
 def describe(mode):
+    if mode.kind == "clock":
+        return "clock" + (f" (timer: {clock.timer_text()} left)" if clock.timer else "")
     is_map = mode.kind == "map"
     r = MAP_RADIUS_MILES if is_map else TRACK_NO_ROUTE_RADIUS_MILES if mode.kind == "track" else RADAR_RADIUS_MILES
     n = MAP_NUM_FLIGHTS if is_map else NUM_FLIGHTS
@@ -403,7 +442,8 @@ def describe(mode):
                ("num_flights", None if mode.kind == "track" else "all" if n is None else n),
                ("heli_only", None if mode.kind == "track" else MAP_HELI_ONLY if is_map else HELI_ONLY),
                ("roads", SHOW_ROADS)]
-    return f"{mode.name} " + " ".join(f"{k}={str(v).lower()}" for k, v in options if v is not None)
+    name = f"track {mode.name}" if mode.kind == "track" else mode.name
+    return f"{name} " + " ".join(f"{k}={str(v).lower()}" for k, v in options if v is not None)
 
 
 def build_dot_mask(dot):
@@ -440,7 +480,8 @@ def grid_on_screen():
     return (sw - GRID_W * dot) // 2, (sh - GRID_H * dot) // 2, dot
 
 
-def show(low, cache):
+def show(low, cache, overlay=None):
+    """overlay(screen, x, y, LED size), if given, draws on top at the window's full resolution."""
     ox, oy, dot = grid_on_screen()
     if cache.get("dot") != dot:
         cache["mask"], cache["dot"] = build_dot_mask(dot), dot
@@ -448,6 +489,8 @@ def show(low, cache):
     screen.fill((0, 0, 0))
     screen.blit(pygame.transform.scale(low, (GRID_W * dot, GRID_H * dot)), (ox, oy))
     screen.blit(cache["mask"], (ox, oy))
+    if overlay:
+        overlay(screen, ox, oy, dot)
     pygame.display.flip()
 
 
@@ -532,6 +575,8 @@ def main(mode="radar"):
                     commands.put("radar")
                 elif event.key == pygame.K_m:
                     commands.put("map")
+                elif event.key == pygame.K_c:
+                    commands.put("clock")
                 elif event.key == pygame.K_t:
                     target = current.blue_flight()
                     if target and target["callsign"]:
@@ -557,12 +602,12 @@ def main(mode="radar"):
 
         now = time.time()
         # Downloads can take seconds, so they wait while you type
-        if typing is None and now - current.last_fetch >= REFRESH_SECONDS:
+        if typing is None and now - current.last_fetch >= REFRESH_SECONDS and current.kind != "clock":
             current.last_fetch = now
             current.refresh(session)
 
         now = time.time()
-        if now - last_scene >= 0.25:
+        if now - last_scene >= 0.25 or current.kind == "clock":  # the clock's sky plane moves every frame
             current.render(scene)
             last_scene = now
 
@@ -576,9 +621,17 @@ def main(mode="radar"):
             draw_command_bar(low, "> " + typing + cursor, COLOR_CALLSIGN, typing=True)
         elif message and now < message_until:
             draw_command_bar(low, message, COLOR_DOWN)
-        show(low, mask_cache)
+        show(low, mask_cache, getattr(current, "overlay", None))
+        # the clock refreshes right after showing a new second, so its quick request is done before the next one
+        if (typing is None and current.kind == "clock" and time.time() - current.last_fetch >= REFRESH_SECONDS
+                and time.time() % 1 < 0.1):
+            current.last_fetch = time.time()
+            current.refresh(session)
         quick = typing is not None or now - last_mouse < 1
-        time.sleep(0.03 if quick else 0.25)
+        pause = 0.03 if quick else 0.25
+        if current.kind == "clock":  # 10 frames a second, and wake right as the next second starts
+            pause = min(pause, 0.1, 1.005 - time.time() % 1)
+        time.sleep(pause)
     pygame.quit()
 
 
@@ -589,5 +642,5 @@ if __name__ == "__main__":
         sys.exit(f"{e}.\n\n{USAGE}")
     if start_mode == "help":
         sys.exit(USAGE)
-    globals().update(start_settings)
+    apply_settings(start_settings)
     main(start_mode or "radar")

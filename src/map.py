@@ -155,11 +155,16 @@ def feed_failed(host, problem):
     feed_problems[host] = problem
 
 
-def get_politely(session, url, timeout=5, method="GET", **kwargs):
+def get_politely(session, url, timeout=None, method="GET", **kwargs):
+    """None while the server is skipped: for a minute after it times out or refuses, or as long as a 429 asks."""
     host = url.split("/")[2]
     if time.time() < paused_until.get(host, 0):
         return None
-    resp = session.request(method, url, timeout=timeout, **kwargs)
+    try:
+        resp = session.request(method, url, timeout=(2, timeout or app.TIMEOUT_SECONDS), **kwargs)
+    except (requests.ConnectionError, requests.Timeout):
+        paused_until[host] = time.time() + 60
+        raise
     if resp.status_code == 429:
         wait = resp.headers.get("Retry-After", "")
         wait = int(wait) if wait.isdigit() else 120
@@ -277,7 +282,7 @@ def fetch_trace(session, icao24, trim_far=True, center=None):
     try:
         resp = get_politely(session, TRACE_URL.format(folder=icao24[-2:], hex=icao24))
         if resp is None:
-            raise ConnectionError("paused after being rate limited")
+            return []  # the server is being skipped: tried again after, not marked as unavailable
         data = resp.content
         body = json.loads(gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data)
         start, rows = body["timestamp"], body["trace"]
@@ -394,18 +399,23 @@ def merc_y(lat, z):
     return (0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * 256 * 2 ** z
 
 
+missing_tiles = False  # set when a tile didn't download, so that background isn't kept
+
+
 def get_tile(session, url, z, x, y, alpha=False):
+    global missing_tiles
     x %= 2 ** z
     if not 0 <= y < 2 ** z:
         return None
     try:
-        resp = session.get(url.format(z=z, x=x, y=y), timeout=8)
-        if resp.status_code != 200:
-            return None
-        img = pygame.image.load(io.BytesIO(resp.content))
-        return img.convert_alpha() if alpha else img.convert()
+        resp = get_politely(session, url.format(z=z, x=x, y=y))
+        if resp is not None and resp.status_code == 200:
+            img = pygame.image.load(io.BytesIO(resp.content))
+            return img.convert_alpha() if alpha else img.convert()
     except Exception:
-        return None
+        pass
+    missing_tiles = True
+    return None
 
 
 def stitch(session, url, z, tx0, tx1, ty0, ty1, alpha=False):
@@ -427,11 +437,16 @@ def get_background(session, view):
     if not SATELLITE_MAP or view is None:
         return None
     key = (tuple(view.rect), view.center, round(view.scale, 6), app.SHOW_ROADS)
-    if key not in background_cache:
-        if len(background_cache) > 20:
-            background_cache.clear()
-        background_cache[key] = build_background(session, view)
-    return background_cache[key]
+    global missing_tiles
+    if key in background_cache:
+        return background_cache[key]
+    if len(background_cache) > 20:
+        background_cache.clear()
+    missing_tiles = False
+    background = build_background(session, view)
+    if not missing_tiles:  # an incomplete one is downloaded again next time
+        background_cache[key] = background
+    return background
 
 
 def build_background(session, view):

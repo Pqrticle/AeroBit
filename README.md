@@ -4,7 +4,7 @@ AeroBit is a live flight display drawn as a 256×144 LED grid in a desktop windo
 
 ## Modes
 
-**Radar** (the default) shows the nearest airline flight with a confirmed route: flight number, airline name and logo, origin and destination, distance flown and left, departure time and ETA, among additional technical data, on a map with the path flown so far and the path still to fly.
+**Radar** (the default) shows the nearest airline flight with a confirmed route: flight number, airline name and logo, origin and destination, distance flown and left, departure time and ETA, among additional technical data, on a map with the path flown so far and the path still to fly. Until a route is confirmed, it shows the nearest aircraft with whatever data is available, and switches to the confirmed flight as soon as there is one.
 
 **Map** is a full-screen view of every aircraft in range, including small planes and helicopters, each with its recent path and heading. It doesn't need routes, so it shows everything the feed sees. Blue indicates the aircraft is the selected flight in radar mode, red is military, and a custom color set in `defaults.yml` marks a flagged aircraft.
 

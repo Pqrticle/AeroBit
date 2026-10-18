@@ -48,7 +48,9 @@ def lol_airport(a):
 
 def adsbdb(session, path):
     try:
-        resp = session.get(ADSBDB_URL + path, timeout=10)
+        resp = get_politely(session, ADSBDB_URL + path)
+        if resp is None:
+            return None
         if resp.status_code == 404:
             return {}
         response = resp.json().get("response")
@@ -69,12 +71,15 @@ def lookup_route(session, cs):
 
 
 def lookup_airline(session, code):
+    """{"name", "iata"}, {} if unknown, or None if it couldn't be downloaded (tried again later)."""
     if code not in airline_cache:
         try:
-            resp = session.get(ADSBDB_URL + "airline/" + code, timeout=10)
+            resp = get_politely(session, ADSBDB_URL + "airline/" + code)
+            if resp is None:
+                return None
             airlines = [] if resp.status_code == 404 else resp.json().get("response")
         except Exception:
-            return {}
+            return None
         match = next((a for a in airlines if isinstance(a, dict) and a.get("icao") == code), None) \
             if isinstance(airlines, list) else None
         airline_cache[code] = {"name": match.get("name") or "", "iata": match.get("iata")} if match else {}
@@ -86,10 +91,15 @@ def look_up_flight(session, cs):
     if route is None:
         return False
     airline = lookup_airline(session, cs[:3])
+    if airline is None:
+        return False
     info_cache[cs] = {"adsbdb": route or None, "airline": airline.get("name") or "", "iata": airline.get("iata")}
     iata = info_cache[cs]["iata"]
     if iata and iata not in logo_cache:
-        logo_cache[iata] = load_logo(session, iata)
+        try:
+            logo_cache[iata] = load_logo(session, iata)
+        except ConnectionError:
+            pass  # tried again with the airline's next flight
     return True
 
 
@@ -99,7 +109,7 @@ def lookup_routeset(session, planes):
         return
     body = {"planes": [{"callsign": p["callsign"], "lat": p["lat"], "lng": p["lon"]} for p in todo]}
     try:
-        resp = get_politely(session, ROUTESET_URL, timeout=10, method="POST", json=body)
+        resp = get_politely(session, ROUTESET_URL, method="POST", json=body)
         routes = resp.json() if resp is not None and resp.status_code == 200 else None
     except Exception as e:
         feed_failed("api.adsb.lol routes", str(e))
@@ -116,8 +126,14 @@ def lookup_routeset(session, planes):
 
 
 def load_logo(session, iata):
+    """The logo as LED pixels, or None if there isn't one. Raises ConnectionError if it couldn't be downloaded."""
     try:
-        resp = session.get(LOGO_URL.format(iata=iata), timeout=10)
+        resp = get_politely(session, LOGO_URL.format(iata=iata))
+    except Exception as e:
+        raise ConnectionError(e)
+    if resp is None:
+        raise ConnectionError("server skipped")
+    try:
         img = pygame.image.load(io.BytesIO(resp.content)).convert_alpha()
     except Exception:
         return None
@@ -260,6 +276,7 @@ def departed(p, now):
 
 def draw_header(low, p, count, tracking=False, near=None):
     info = info_cache.get(p["callsign"], {})
+    name = p["callsign"] or p["reg"] or p["icao24"].upper()  # an aircraft without a callsign shows its tail number
     logo = logo_cache.get(info.get("iata"))
     if logo:
         ox, oy = 1, 1 + (LOGO_H - logo["h"]) // 2
@@ -268,13 +285,13 @@ def draw_header(low, p, count, tracking=False, near=None):
         text_x = max(38, 1 + logo["w"] + 4)
     else:
         low.fill(COLOR_LINE, (1, 1, LOGO_H, LOGO_H))
-        draw_text_center(low, p["callsign"][:3], 1 + LOGO_H // 2, 14, COLOR_TEXT)
+        draw_text_center(low, name[:3], 1 + LOGO_H // 2, 14, COLOR_TEXT)
         text_x = 38
 
     dist = f"{p['dist']:.1f}MI" if p["dist"] < 100 else f"{p['dist']:,.0f}MI"
     if tracking:  # the flight number is always scale 3; a distance too wide beside it goes small, below it
         scale = 3
-        right = text_x + text_width(p["callsign"], scale) + 4
+        right = text_x + text_width(name, scale) + 4
         draw_text_right(low, "TRACKING", GRID_W - 2, 3, COLOR_LABEL)
         big = GRID_W - 2 - text_width(dist, 2) >= right
         draw_text_right(low, dist, GRID_W - 2, 20 if big else 27, COLOR_TEXT, 2 if big else 1)
@@ -285,12 +302,12 @@ def draw_header(low, p, count, tracking=False, near=None):
         for i, t in enumerate(labels):
             draw_text_right(low, t, GRID_W - 2, 3 + i * 8, COLOR_LABEL)
         draw_text_right(low, dist, GRID_W - 2, 20, COLOR_TEXT, 2)
-        scale = next((s for s in (4, 3) if text_x + text_width(p["callsign"], s) <= block_left - 4), 2)
-        right = text_x + text_width(p["callsign"], scale) + 4
+        scale = next((s for s in (4, 3) if text_x + text_width(name, s) <= block_left - 4), 2)
+        right = text_x + text_width(name, scale) + 4
 
     color = (alert_color(p) if tracking else None) or COLOR_CALLSIGN
-    draw_text(low, p["callsign"], text_x, 3, color, scale, [3] * 7)
-    sub = info.get("airline") or p["callsign"][:3]
+    draw_text(low, name, text_x, 3, color, scale, [3] * 7)
+    sub = info.get("airline") or name[:3]
     draw_text(low, fit(sub, (block_left - 6 - text_x) // 6), text_x, 25, COLOR_TEXT, 1, [1, 1, 2, 1, 2, 1, 1])
     if near:  # the first label that fits beside the flight number, between TRACKING and the distance
         text = next((t for t in near if text_width(t) <= GRID_W - 2 - right), None)
@@ -375,7 +392,8 @@ def draw_route(low, p, now, trail=None):
         took_off = takeoff_airport(p["icao24"])
         if took_off:
             draw_text(low, took_off["code"], 2, top, COLOR_AIRPORT, 3)
-            draw_text(low, fit(took_off["city"], 20), 2, top + 24, COLOR_AIRPORT)
+            city = fit(took_off["city"], 20)
+            draw_text(low, city, 2, top + 24, COLOR_AIRPORT)
             left = 2 + text_width(took_off["code"], 3) + 8
             mid_x, width = (left + GRID_W - 2) // 2, GRID_W - 2 - left
             flown = miles_flown(p, trail, now, took_off)
@@ -383,7 +401,13 @@ def draw_route(low, p, now, trail=None):
             draw_text_center(low, "ARRIVAL UNKNOWN", mid_x, top, COLOR_LABEL)
             if flown is not None:
                 draw_text_fitting(low, progress_options(flown, None, None), mid_x, top + 12, width, COLOR_TEXT)
-            draw_text_fitting(low, times_options(departed(p, now), None, now), mid_x, top + 24, width, COLOR_TEXT)
+            times = times_options(departed(p, now), None, now)
+            text = next((t for t in times if tight_width(t) <= width), times[-1])
+            x = mid_x - tight_width(text) // 2
+            city_end = 2 + 6 * (len(city) - 1) + glyph_cols(city[-1])[1] if city else 0  # its last lit column
+            if x <= city_end + 1:  # it would touch the city name: a few LEDs past it, but not past the right edge
+                x = max(x, min(city_end + 4, GRID_W - 2 - tight_width(text)))  # never moved left
+            draw_tight(low, text, x, top + 24, COLOR_TEXT)
         else:
             draw_text_center(low, "ROUTE NOT AVAILABLE", GRID_W // 2, 52, COLOR_LABEL)
         return
@@ -524,23 +548,6 @@ class RadarMode:
             print(e)
         self.select(session)
 
-    def settle(self, session, passes=15):
-        """At startup: keep looking up routes and takeoffs until the flights to show are found or none are left
-        to check, so the first screen is complete."""
-        for _ in range(passes):
-            shown = [q for q in (self.selected, *self.extras) if q]
-            enough = self.wanted() is not None and len(shown) >= self.wanted()
-            if not self.unchecked(shown[-1]["dist"] if enough else None):
-                return
-            update_lookups(session, self.planes)
-            self.select(session)
-
-    def unchecked(self, closer_than=None):
-        """Whether any airline flight (closer than closer_than miles) still needs its route or takeoff checked."""
-        return any(is_candidate(q["callsign"]) and (closer_than is None or q["dist"] < closer_than) and
-                   (q["callsign"] not in info_cache or (info_cache[q["callsign"]] and not takeoff_checked(q["icao24"])))
-                   for q in self.planes)
-
     def wanted(self):
         return app.NUM_FLIGHTS if not app.HELI_ONLY else (1 if app.NUM_FLIGHTS is None else min(1, app.NUM_FLIGHTS))
 
@@ -568,10 +575,13 @@ class RadarMode:
         for icao in [i for i in self.trails if i not in nearby]:
             del self.trails[icao]
         self.selected, self.extras = (shown[0] if shown else None), shown[1:]
+        if not shown and self.planes and wanted != 0:  # nothing confirmed yet: the nearest aircraft, preferably with a callsign
+            self.selected = next((q for q in self.planes if q["callsign"]), self.planes[0])
         self.helis = []
         if app.HELI_ONLY:
             helis = [q for q in self.planes if is_helicopter(q) and q is not self.selected]
-            self.helis = helis if app.NUM_FLIGHTS is None else helis[:max(0, app.NUM_FLIGHTS - len(shown))]
+            shown_count = len(shown) or (1 if self.selected else 0)
+            self.helis = helis if app.NUM_FLIGHTS is None else helis[:max(0, app.NUM_FLIGHTS - shown_count)]
 
     def hoverable(self):
         return [q for q in (self.selected, *self.extras, *self.helis) if q]

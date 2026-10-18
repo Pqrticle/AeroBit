@@ -5,8 +5,8 @@ import aerobit as app
 from aerobit import (COLOR_CALLSIGN, COLOR_LABEL, COLOR_OFF, COLOR_TEXT, GRID_W, HOME_COORDS, clean,
                      draw_outlined_icon, draw_text_center)
 from map import (HELICOPTER_DOT, MapView, aircraft_color, current_position, distance_miles, draw_airports,
-                 draw_dotted_path, draw_home, draw_map_base, feed_get, fetch_trace, get_background, map_icon,
-                 nearest_town, parse_plane, plane_box, takeoff_airport)
+                 draw_dotted_path, draw_home, draw_map_base, feed_get, fetch_trace, get_background, get_politely,
+                 map_icon, nearest_town, parse_plane, plane_box, takeoff_airport)
 from radar import (ADSBDB_URL, PANEL, adsbdb, best_route, draw_info, flight_path, info_cache, look_up_flight,
                    lookup_routeset, near_labels, note_trends)
 
@@ -25,7 +25,8 @@ def callsign_options(session, flight):
     m = re.fullmatch(r"([A-Z0-9]{2})(\d{1,4}[A-Z]?)", flight)
     if m:
         try:
-            airlines = session.get(ADSBDB_URL + "airline/" + m.group(1), timeout=10).json().get("response")
+            resp = get_politely(session, ADSBDB_URL + "airline/" + m.group(1))
+            airlines = resp.json().get("response") if resp is not None else None
         except Exception:
             airlines = None
         if isinstance(airlines, list):
@@ -137,7 +138,9 @@ class TrackMode:
 
     def render(self, low):
         trail = self.trails.get(self.selected["icao24"]) if self.selected else None
-        # when no version of the current town fits, the last label that did stays up
-        near = near_labels(self.near) + ([self.last_near] if self.last_near else []) if self.near else None
+        # when no version of the current town fits, the last label that did stays up; before any has, the town
+        # without NEAR, or nothing
+        fallback = self.last_near or (self.near.split(", ")[0] if self.near else None)
+        near = near_labels(self.near) + [fallback] if self.near else None
         self.last_near = render_tracking(low, self.view, self.background, self.selected, trail, self.flight,
                                          time.time(), near) or self.last_near

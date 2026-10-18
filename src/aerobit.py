@@ -93,6 +93,7 @@ MAP_NUM_FLIGHTS = None  # None = all
 TRACK_NO_ROUTE_RADIUS_MILES = 1000  # tracking without a known route
 MAX_TRACES = 4  # per refresh; more risks rate limits
 REFRESH_SECONDS = 15
+TIMEOUT_SECONDS = 3  # how long to wait for a server's answer (plus up to 2 s to connect) before giving up
 ETA_BUFFER_MINUTES = 15  # added for the approach and landing
 MAX_LOOKUPS = 8  # per refresh
 TAKEOFF_AIRPORT_MILES = 10
@@ -432,12 +433,6 @@ def draw_command_bar(low, text, color, typing=False):
     draw_text(low, text, 2, GRID_H - 9, color)
 
 
-def draw_loading(low, elapsed):
-    low.fill(COLOR_OFF)
-    x = (GRID_W - text_width("LOADING...", 3)) // 2  # fixed, so the word doesn't shift as dots appear
-    draw_text(low, "LOADING" + "." * ((int(elapsed / 0.4) + 1) % 4), x, (GRID_H - 21) // 2, COLOR_LABEL, 3)
-
-
 def grid_on_screen():
     """(x, y, LED size) of the LED grid, scaled to fit the window and centered."""
     sw, sh = pygame.display.get_surface().get_size()
@@ -456,6 +451,14 @@ def show(low, cache):
     pygame.display.flip()
 
 
+class Session(requests.Session):
+    """Lets the window answer Windows between downloads, so it isn't marked as not responding."""
+    def request(self, *args, **kwargs):
+        if threading.current_thread() is threading.main_thread() and pygame.display.get_init():
+            pygame.event.pump()
+        return super().request(*args, **kwargs)
+
+
 def read_terminal(commands):
     try:
         for line in sys.stdin:
@@ -472,40 +475,10 @@ def main(mode="radar"):
     low = pygame.Surface((GRID_W, GRID_H))
     mask_cache = {}
 
-    session = requests.Session()
+    session = Session()
     session.headers["User-Agent"] = "led-flight-display"
-    loaded = {}
-
-    def load():  # in the background, so the loading screen can animate
-        try:
-            mapmode.load_airports(session)
-            first = make_mode(session, mode)
-            first.last_fetch = time.time()
-            first.refresh(session)
-            if first.kind == "radar":
-                first.settle(session)
-            loaded["mode"] = first
-        except Exception as e:
-            loaded["error"] = e
-
-    pygame.display.set_caption("AeroBit")
-    loader = threading.Thread(target=load, daemon=True)
-    loader.start()
-    started = time.time()
-    while loader.is_alive():
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
-                pygame.quit()
-                return
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
-                fullscreen = not fullscreen
-                open_window(fullscreen)
-        draw_loading(low, time.time() - started)
-        show(low, mask_cache)
-        time.sleep(0.05)
-    if "error" in loaded:
-        raise loaded["error"]
-    current = loaded["mode"]
+    mapmode.load_airports(session)
+    current = make_mode(session, mode)
     set_caption(current)
     pygame.key.start_text_input()
 
@@ -561,7 +534,7 @@ def main(mode="radar"):
                     commands.put("map")
                 elif event.key == pygame.K_t:
                     target = current.blue_flight()
-                    if target:
+                    if target and target["callsign"]:
                         commands.put(("track", target["callsign"]))
 
         while not commands.empty():

@@ -18,7 +18,7 @@ AeroBit is a live flight display drawn as a 256×144 LED grid in a desktop windo
 
 The free route databases are often out of date or guessed, and airlines reuse flight numbers, so a callsign lookup alone is often wrong. AeroBit only shows a route once three independent sources agree:
 
-1. **Backtracking the flight path.** It downloads the aircraft's path for its current flight from OpenSky and looks at where it begins. If the path starts on the ground or below 2,500 ft, the takeoff point is matched to the nearest airline airport within 10 miles. That airport is the only origin it will accept.
+1. **Backtracking the flight path.** It downloads the aircraft's path for its current flight from OpenSky and looks at where it begins. If the path starts within 10 miles of an airline airport, and on the ground or less than 2,500 ft above that airport's elevation, the nearest such airport is taken as where it took off. That airport is the only origin it will accept.
 2. **Comparing with the databases.** It looks up the callsign in adsbdb and accepts only a route that departs from that takeoff airport. If adsbdb's route starts somewhere else, or it has none, it then asks adsb.lol, which lists multi-stop flights one leg at a time, so it can match a later leg.
 3. **Three sanity checks against the live position.** The route is rejected if any of these fail:
    - **Position:** the aircraft is more than 40 miles or 15% of the route length (whichever is larger) off the direct path between the two airports.

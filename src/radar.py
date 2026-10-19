@@ -8,11 +8,11 @@ from aerobit import (COLOR_AIRPORT, COLOR_CALLSIGN, COLOR_DOWN, COLOR_EMERGENCY,
                      COLOR_LINE, COLOR_OFF, COLOR_TEXT, COLOR_UP, ETA_BUFFER_MINUTES, GLYPHS, GRID_H, GRID_W,
                      MAX_LOOKUPS, MAX_TRACES, clean, draw_icon, draw_outlined_icon, draw_text, draw_text_center,
                      draw_text_right, fit, text_width)
-from map import (HELICOPTER_DOT, PLANE_ICON, MapView, SourceProblem, aircraft_color, alert_color, bearing,
+from map import (HELICOPTER_DOT, PLANE_ICON, STARTED, MapView, SourceProblem, aircraft_color, alert_color, bearing,
                  current_position, departure_cache, distance_miles, draw_airports, draw_dotted_path, draw_home,
                  draw_map_base, fetch_aircraft, fetch_trace, get_background, get_politely, great_circle, http_error,
-                 is_candidate, is_helicopter, plane_box, renamed, source_failed, source_ok, takeoff_airport,
-                 takeoff_checked)
+                 is_candidate, is_helicopter, plane_box, renamed, source_failed, source_ok, sources_seen,
+                 takeoff_airport, takeoff_checked)
 
 ADSBDB_URL = "https://api.adsbdb.com/v0/"
 ROUTESET_URL = "https://api.adsb.lol/api/0/routeset"
@@ -596,6 +596,9 @@ class RadarMode:
         for icao in [i for i in self.trails if i not in nearby]:
             del self.trails[icao]
         self.selected, self.extras = (shown[0] if shown else None), shown[1:]
+        if shown and "first route" not in sources_seen:
+            print(f"[Radar]: first confirmed route, {shown[0]['callsign']} ({time.time() - STARTED:.0f} s after start)")
+            sources_seen.add("first route")
         if not shown and self.planes and wanted != 0:  # nothing confirmed yet: the nearest aircraft, preferably with a callsign
             self.selected = next((q for q in self.planes if q["callsign"]), self.planes[0])
         self.helis = []

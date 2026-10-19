@@ -145,8 +145,8 @@ def parse_plane(ac, now, center=None):
 
 
 SOURCES = {  # name: (backup, or None; what's lost while it's down and its backup is too)
-    "adsb.fi": ("adsb.lol", "no live aircraft"),
-    "adsb.lol": ("adsb.fi", "no live aircraft"),
+    "adsb.fi": ("adsb.lol live data", "no live aircraft"),
+    "adsb.lol live data": ("adsb.fi", "no live aircraft"),
     "OpenSky": (None, "no new flight paths, so no new routes"),
     "OpenSky login": (None, "using OpenSky without an account (lower daily limit)"),
     "adsb.lol routes": (None, "only flights whose adsbdb route matches can be shown"),
@@ -154,8 +154,11 @@ SOURCES = {  # name: (backup, or None; what's lost while it's down and its backu
     "Aviasales logos": (None, "no new airline logos"),
     "Esri map tiles": (None, "parts of the map are blank"),
 }
-FEED_NAMES = {"opendata.adsb.fi": "adsb.fi", "api.adsb.lol": "adsb.lol"}
+FEED_NAMES = {"opendata.adsb.fi": "adsb.fi", "api.adsb.lol": "adsb.lol live data"}
+BACKUP_ONLY = {"adsb.lol live data", "adsb.lol routes"}
 source_problems = {}  # name -> (what's wrong, when it last failed), for the sources down right now
+sources_seen = set()  # sources that have answered at least once, to report each one's first answer
+STARTED = time.time()
 paused_until = {}
 
 
@@ -175,6 +178,10 @@ def describe(e):
     return "can't connect" if isinstance(e, requests.RequestException) else str(e) if isinstance(e, SourceProblem) else "bad data"
 
 
+def label(name):
+    return f"[{name}]" + (" (backup only)" if name in BACKUP_ONLY else "") + ":"
+
+
 def source_failed(name, e):
     """One short line when a source goes down, saying what takes over; quiet while it stays down, even if its problem
     changes (a slow server can alternate between timing out and answering badly)."""
@@ -184,13 +191,16 @@ def source_failed(name, e):
         # a backup that hasn't failed in the last minute counts as working: it may not have been asked since
         backup_down = backup and now - source_problems.get(backup, ("", 0))[1] < 60
         then = f"{backup} is also down: {lost}" if backup_down else f"using {backup}" if backup else lost
-        print(f"[{name}] {problem}, {then}")
+        print(f"{label(name)} {problem}, {then}")
     source_problems[name] = (problem, now)
 
 
 def source_ok(name):
     if source_problems.pop(name, None):
-        print(f"[{name}] working again")
+        print(f"{label(name)} working again")
+    elif name not in sources_seen:
+        print(f"{label(name)} ok ({time.time() - STARTED:.0f} s after start)")
+    sources_seen.add(name)
 
 
 def get_politely(session, url, timeout=None, method="GET", **kwargs):
@@ -211,25 +221,37 @@ def get_politely(session, url, timeout=None, method="GET", **kwargs):
     return resp
 
 
+def feed_answer(session, url):
+    """The aircraft list from one feed, or None while it's skipped. Raises on any problem."""
+    resp = get_politely(session, url)
+    if resp is None:
+        return None
+    if resp.status_code != 200:
+        raise http_error(resp)
+    body = resp.json()
+    found = body.get("ac", body.get("aircraft"))
+    if not isinstance(found, list):
+        raise ValueError("no aircraft list")
+    return found
+
+
 def feed_get(session, urls, **fmt):
+    found = None
     for url in sorted(urls, key=lambda u: FEED_NAMES[u.split("/")[2]] in source_problems):
         name = FEED_NAMES[url.split("/")[2]]
+        if found is not None and (name in sources_seen or name in source_problems):
+            continue  # an unneeded backup is asked once, at startup, just to report whether it works
         try:
-            resp = get_politely(session, url.format(**fmt))
-            if resp is None:
-                continue
-            if resp.status_code != 200:
-                raise http_error(resp)
-            body = resp.json()
-            found = body.get("ac", body.get("aircraft"))
-            if not isinstance(found, list):
-                raise ValueError("no aircraft list")
+            answer = feed_answer(session, url.format(**fmt))
         except Exception as e:
             source_failed(name, e)
             continue
-        source_ok(name)
-        return found
-    raise ConnectionError("no flight feed responded")  # already reported by source_failed
+        if answer is not None:
+            source_ok(name)
+            found = answer if found is None else found
+    if found is None:
+        raise ConnectionError("no flight feed responded")  # already reported by source_failed
+    return found
 
 
 def fetch_aircraft(session, radius_miles, center=None):
@@ -252,40 +274,42 @@ def renamed(airport):
 
 
 def load_airports(session):
-    data = None
+    data, downloaded = None, False
     exists = os.path.exists(AIRPORTS_FILE)
     if not exists or time.time() - os.path.getmtime(AIRPORTS_FILE) > 30 * 86400:
         try:
-            print("Downloading airports.csv (first run, or monthly update)...")
+            print("[OurAirports]: downloading airports.csv (first run, or monthly update)...")
             resp = session.get(AIRPORTS_URL, timeout=60)
             if resp.status_code != 200:
                 raise http_error(resp)
-            data = resp.content
+            data, downloaded = resp.content, True
             try:
                 with open(AIRPORTS_FILE, "wb") as fh:
                     fh.write(data)
             except OSError as e:
-                print(f"Couldn't save {AIRPORTS_FILE} ({e.strerror}); it will be downloaded again next start")
+                print(f"[OurAirports]: couldn't save airports.csv ({e.strerror}), it will be downloaded again next start")
         except Exception as e:
-            print(f"[OurAirports] {describe(e)}, " + ("using the saved airports.csv" if exists
-                                                      else "no airport list: no takeoff airports, so no routes"))
+            print(f"[OurAirports]: {describe(e)}, " + ("using the saved airports.csv" if exists
+                                                       else "no airport list: no takeoff airports, so no routes"))
     if data is None:
         try:
             with open(AIRPORTS_FILE, "rb") as fh:
                 data = fh.read()
         except OSError as e:
             if exists:
-                print(f"Couldn't read {AIRPORTS_FILE} ({e.strerror}): no takeoff airports, so no routes")
+                print(f"[OurAirports]: couldn't read airports.csv ({e.strerror}), no takeoff airports, so no routes")
             return
     ALL_AIRPORTS[:] = [renamed({"code": r["iata_code"] or r["icao_code"] or r["ident"], "icao": r["icao_code"] or r["ident"],
                                 "city": r["municipality"] or r["name"], "type": r["type"], "airline": r["scheduled_service"] == "yes",
-                                "pos": (float(r["latitude_deg"]), float(r["longitude_deg"]))})
+                                "pos": (float(r["latitude_deg"]), float(r["longitude_deg"])),
+                                "elev": float(r["elevation_ft"] or 0)})  # feet; the few without one count as sea level
                        for r in csv.DictReader(io.StringIO(data.decode("utf-8")))
                        if r["type"] in ("large_airport", "medium_airport", "small_airport")]
     AIRPORTS[:] = [a for a in ALL_AIRPORTS if a["airline"]]
     TOWNS[:] = [(float(r["latitude_deg"]), float(r["longitude_deg"]), town_name(r))
                 for r in csv.DictReader(io.StringIO(data.decode("utf-8")))
                 if r["type"] in ("large_airport", "medium_airport", "small_airport") and r["municipality"]]
+    print(f"[OurAirports]: ok, {'downloaded and ' if downloaded else ''}read {len(ALL_AIRPORTS):,} airports from airports.csv")
 
 
 def town_name(r):
@@ -367,8 +391,10 @@ def fetch_trace(session, icao24, trim_far=True, center=None):
         return []  # the server is being skipped: tried again after, not marked as unavailable
     source_ok("OpenSky")
     first_alt = pts[0][3] if pts else None
-    took_off = first_alt == "ground" or (isinstance(first_alt, (int, float)) and first_alt < 2500)
-    takeoff_cache[icao24] = (time.time(), nearest_airport(pts[0][:2], TAKEOFF_AIRPORT_MILES) if took_off else None)
+    airport = nearest_airport(pts[0][:2], TAKEOFF_AIRPORT_MILES) if pts else None
+    ground = airport["elev"] if airport else 0  # the altitude is above sea level, so measure from the airport
+    took_off = first_alt == "ground" or (isinstance(first_alt, (int, float)) and first_alt - ground < 2500)
+    takeoff_cache[icao24] = (time.time(), airport if took_off else None)
     if took_off:
         departure_cache[icao24] = next((t for _, _, t, alt in pts if alt != "ground"), None)
     else:

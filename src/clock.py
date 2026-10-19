@@ -9,7 +9,7 @@ from timezonefinder import TimezoneFinder
 
 import aerobit as app
 from aerobit import GRID_H, GRID_W, HOME_COORDS
-from map import FEED_URLS, NM_TO_MILES, PLANE_ICON, MapView, aircraft_color, parse_plane
+from map import FEED_URLS, NM_TO_MILES, PLANE_ICON, MapMode, MapView, aircraft_color, parse_plane
 
 FONT_DIR = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
 ZONE = ZoneInfo(TimezoneFinder().timezone_at(lat=HOME_COORDS[0], lng=HOME_COORDS[1]) or "UTC")  # the .env location's
@@ -211,7 +211,8 @@ class ClockMode:
         self.text, self.text_key = None, None
         self.map_view = MapView.around(pygame.Rect(0, 0, GRID_W, GRID_H), HOME_COORDS, app.DEFAULTS["MAP_RADIUS_MILES"])
         self.radius = math.ceil(self.map_view.reach_miles())
-        self.aircraft = []
+        self.center = HOME_COORDS  # for find_radar_pick
+        self.aircraft, self.radar_pick = [], None
 
     def refresh(self, session):
         """One quick request with a short timeout: the dots are secondary, and a slow answer mustn't hold up the time."""
@@ -224,6 +225,7 @@ class ClockMode:
         now = time.time()
         planes = sorted((p for p in (parse_plane(ac, now, HOME_COORDS) for ac in found) if p), key=lambda p: p["dist"])
         self.aircraft = [p for p in planes if self.map_view.contains(p["lat"], p["lon"])]
+        self.radar_pick = MapMode.find_radar_pick(self, planes)  # from what radar and map mode already looked up
 
     def hoverable(self):
         return []
@@ -251,7 +253,7 @@ class ClockMode:
         count = min(len(self.aircraft), (GRID_W - 4 + DOT_GAP) // step)
         x = (GRID_W - (count * step - DOT_GAP)) // 2
         for i, p in enumerate(self.aircraft[:count]):
-            low.fill(aircraft_color(p), (x + i * step, 8, DOT, DOT))
+            low.fill(aircraft_color(p, p["icao24"] == self.radar_pick), (x + i * step, 8, DOT, DOT))
 
     def font(self, file, size, dot):
         if self.fonts_dot != dot:

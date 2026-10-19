@@ -8,10 +8,11 @@ from aerobit import (COLOR_AIRPORT, COLOR_CALLSIGN, COLOR_DOWN, COLOR_EMERGENCY,
                      COLOR_LINE, COLOR_OFF, COLOR_TEXT, COLOR_UP, ETA_BUFFER_MINUTES, GLYPHS, GRID_H, GRID_W,
                      MAX_LOOKUPS, MAX_TRACES, clean, draw_icon, draw_outlined_icon, draw_text, draw_text_center,
                      draw_text_right, fit, text_width)
-from map import (HELICOPTER_DOT, PLANE_ICON, MapView, aircraft_color, alert_color, bearing, current_position,
-                 departure_cache, distance_miles, draw_airports, draw_dotted_path, draw_home, draw_map_base,
-                 feed_failed, fetch_aircraft, fetch_trace, get_background, get_politely, great_circle,
-                 is_candidate, is_helicopter, plane_box, renamed, takeoff_airport, takeoff_checked)
+from map import (HELICOPTER_DOT, PLANE_ICON, MapView, SourceProblem, aircraft_color, alert_color, bearing,
+                 current_position, departure_cache, distance_miles, draw_airports, draw_dotted_path, draw_home,
+                 draw_map_base, fetch_aircraft, fetch_trace, get_background, get_politely, great_circle, http_error,
+                 is_candidate, is_helicopter, plane_box, renamed, source_failed, source_ok, takeoff_airport,
+                 takeoff_checked)
 
 ADSBDB_URL = "https://api.adsbdb.com/v0/"
 ROUTESET_URL = "https://api.adsb.lol/api/0/routeset"
@@ -47,23 +48,29 @@ def lol_airport(a):
 
 
 def adsbdb(session, path):
+    """The response, {} if adsbdb has nothing for it, or None if it couldn't be asked (tried again later)."""
     try:
         resp = get_politely(session, ADSBDB_URL + path)
         if resp is None:
             return None
         if resp.status_code == 404:
+            source_ok("adsbdb")
             return {}
-        response = resp.json().get("response")
-    except Exception:
+        if resp.status_code != 200:
+            raise http_error(resp)
+        response = resp.json()["response"]
+    except Exception as e:
+        source_failed("adsbdb", e)
         return None
-    return response if isinstance(response, dict) else {}
+    source_ok("adsbdb")
+    return response if isinstance(response, (dict, list)) else {}
 
 
 def lookup_route(session, cs):
     response = adsbdb(session, "callsign/" + cs)
     if response is None:
         return None
-    r = response.get("flightroute")
+    r = response.get("flightroute") if isinstance(response, dict) else None
     if not isinstance(r, dict):
         return ()
     orig, dest = airport(r.get("origin") or {}), airport(r.get("destination") or {})
@@ -73,12 +80,8 @@ def lookup_route(session, cs):
 def lookup_airline(session, code):
     """{"name", "iata"}, {} if unknown, or None if it couldn't be downloaded (tried again later)."""
     if code not in airline_cache:
-        try:
-            resp = get_politely(session, ADSBDB_URL + "airline/" + code)
-            if resp is None:
-                return None
-            airlines = [] if resp.status_code == 404 else resp.json().get("response")
-        except Exception:
+        airlines = adsbdb(session, "airline/" + code)
+        if airlines is None:
             return None
         match = next((a for a in airlines if isinstance(a, dict) and a.get("icao") == code), None) \
             if isinstance(airlines, list) else None
@@ -103,19 +106,35 @@ def look_up_flight(session, cs):
     return True
 
 
+def needs_adsblol(p):
+    """adsb.lol is only asked once the takeoff airport is known and adsbdb's route doesn't start there."""
+    info, orig = info_cache.get(p["callsign"]), takeoff_airport(p["icao24"])
+    if not info or "adsblol" in info or not orig:
+        return False
+    db = info.get("adsbdb")
+    return not (db and same_airport(db[0], orig))
+
+
 def lookup_routeset(session, planes):
-    todo = [p for p in planes if p["callsign"] in info_cache and "adsblol" not in info_cache[p["callsign"]]][:100]
+    todo = [p for p in planes if needs_adsblol(p)][:100]
     if not todo:
         return
     body = {"planes": [{"callsign": p["callsign"], "lat": p["lat"], "lng": p["lon"]} for p in todo]}
     try:
         resp = get_politely(session, ROUTESET_URL, method="POST", json=body)
-        routes = resp.json() if resp is not None and resp.status_code == 200 else None
+        if resp is None:
+            return
+        if not resp.ok:
+            raise http_error(resp)
+        if not resp.content:
+            raise SourceProblem("no data")
+        routes = resp.json()
+        if not isinstance(routes, list):
+            raise ValueError("not a list")
     except Exception as e:
-        feed_failed("api.adsb.lol routes", str(e))
+        source_failed("adsb.lol routes", e)
         return
-    if not isinstance(routes, list):
-        return
+    source_ok("adsb.lol routes")
     for p in todo:
         info_cache[p["callsign"]]["adsblol"] = []
     for r in routes:
@@ -130,9 +149,11 @@ def load_logo(session, iata):
     try:
         resp = get_politely(session, LOGO_URL.format(iata=iata))
     except Exception as e:
+        source_failed("Aviasales logos", e)
         raise ConnectionError(e)
     if resp is None:
         raise ConnectionError("server skipped")
+    source_ok("Aviasales logos")
     try:
         img = pygame.image.load(io.BytesIO(resp.content)).convert_alpha()
     except Exception:
@@ -200,9 +221,9 @@ def best_route(p):
     if not info or not orig:
         return None
     db, legs = info.get("adsbdb"), info.get("adsblol") or []
-    dest = next((d for o, d in legs if same_airport(o, orig)), None)
-    if dest is None and db and same_airport(db[0], orig):
-        dest = db[1]
+    dest = db[1] if db and same_airport(db[0], orig) else None
+    if dest is None:  # adsb.lol lists each leg, so it can match a later leg of a multi-stop flight
+        dest = next((d for o, d in legs if same_airport(o, orig)), None)
     if dest is None or same_airport(orig, dest) or not route_fits(p, orig["pos"], dest["pos"]):
         return None
     return {"orig": orig, "dest": dest}
@@ -544,8 +565,8 @@ class RadarMode:
             note_trends(planes)
             update_lookups(session, planes)
             self.planes = planes
-        except ConnectionError as e:
-            print(e)
+        except ConnectionError:
+            pass  # each feed already said what's wrong
         self.select(session)
 
     def wanted(self):

@@ -1,6 +1,6 @@
 # AeroBit
 
-AeroBit is a live flight display drawn as a 256×144 LED grid in a desktop window. It pulls aircraft positions from free ADS-B feeds, works out where airline flights are going, and shows them on a satellite map. No account or API key is needed.
+AeroBit is a live flight display drawn as a 256×144 LED grid in a desktop window. It pulls aircraft positions from free ADS-B feeds, works out where airline flights are going, and shows them on a satellite map. All APIs are completely free.
 
 ## Modes
 
@@ -18,8 +18,8 @@ AeroBit is a live flight display drawn as a 256×144 LED grid in a desktop windo
 
 The free route databases are often out of date or guessed, and airlines reuse flight numbers, so a callsign lookup alone is often wrong. AeroBit only shows a route once three independent sources agree:
 
-1. **Backtracking the flight path.** It downloads the aircraft's path for the day and looks at where it begins. If the path starts on the ground or below 2,500 ft, the takeoff point is matched to the nearest airline airport within 10 miles. That airport is the only origin it will accept.
-2. **Comparing with the databases.** It looks up the callsign in adsb.lol and adsbdb and accepts only a route that departs from that takeoff airport. The destination comes from the matching route, preferring adsb.lol, which lists multi-stop flights one leg at a time.
+1. **Backtracking the flight path.** It downloads the aircraft's path for its current flight from OpenSky and looks at where it begins. If the path starts on the ground or below 2,500 ft, the takeoff point is matched to the nearest airline airport within 10 miles. That airport is the only origin it will accept.
+2. **Comparing with the databases.** It looks up the callsign in adsbdb and accepts only a route that departs from that takeoff airport. If adsbdb's route starts somewhere else, or it has none, it then asks adsb.lol, which lists multi-stop flights one leg at a time, so it can match a later leg.
 3. **Three sanity checks against the live position.** The route is rejected if any of these fail:
    - **Position:** the aircraft is more than 40 miles or 15% of the route length (whichever is larger) off the direct path between the two airports.
    - **Heading:** away from either end of the route (more than 30 miles from each), it's pointed more than 60° away from the destination.
@@ -49,6 +49,7 @@ Rename `.env.example` to `.env` and fill it in
 
 `CENTER_COORDS` is required: the latitude and longitude of a specific place (e.g., your location), in decimal degrees, that radar and map mode center on.
 `FLAGGED_AIRCRAFT` is an optional comma-separated list of callsigns or tail numbers to color separately.
+`OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` are optional. Flight paths come from OpenSky, which works without an account at 400 credits a day. An API key raises that to 4,000 a day and is recommended, since each flight path uses about 4 credits. To get one, [sign up for a free OpenSky account](https://opensky-network.org/), create an API client on your account page, and copy its client ID and secret here.
 
 Startup defaults, like the radar radius and whether roads are drawn, are in `defaults.yml` (see [Settings](#settings)).
 
@@ -67,7 +68,7 @@ python src/aerobit.py [radar | map | clock | track FLIGHT] [options]
 ```
 Commands can be entered at any time from either the command line or the display. To enter a command from the display, press `Enter` first to open the input prompt. Both methods are functionally equivalent.
 
-Give at most one mode, plus any options, in any order. Note attributes reset to defaults when the mode is switched. The default mode is radar. `help` will print the below list.
+Give at most one mode, plus any options, in any order. Note attributes reset to defaults when the mode is switched. The default mode is radar. `help` will print the below list and `credits` will show the project contributors.
 
 | Option | Default | Effect |
 |---|---|---|
@@ -139,9 +140,10 @@ Less common settings are constants near the top of `src/aerobit.py`:
 
 | Source | What it provides |
 |---|---|
-| [adsb.fi](https://adsb.fi/) | The main live feed: every aircraft within a radius (radar and map) and worldwide search by callsign (tracking), each with its position, altitude, speed, heading, vertical rate, squawk, tail number, aircraft type and military flag |
-| [adsb.lol](https://adsb.lol/) | The backup live feed when adsb.fi doesn't answer; the only source of flight paths (each aircraft's recorded positions today, which show where and when it took off); and a route database that lists each leg of multi-stop flights |
-| [adsbdb](https://www.adsbdb.com/) | A second route database (origin and destination for a callsign), airline names and two-letter codes (used to find logos), and flight numbers turned into callsigns (AA123 → AAL123) |
+| [adsb.fi](https://adsb.fi/) | Main live feed for every aircraft within a radius (radar, map and clock) and worldwide search by callsign (tracking), each with its position, altitude, speed, heading, vertical rate, squawk, tail number, aircraft type and military flag |
+| [OpenSky Network](https://opensky-network.org/) | Flight paths for each aircraft's recorded positions on its current flight, which show where it has been and when it took off  |
+| [adsbdb](https://www.adsbdb.com/) | Main route database and airline names/codes for turning flight numbers into callsigns for tracking (AA123 → AAL123) and referencing logos |
+| [adsb.lol](https://adsb.lol/) | Backup for the live feed and callsign search when adsb.fi doesn't answer, and a second route database, used when adsbdb's route doesn't start at the takeoff airport |
 | [Aviasales](https://www.aviasales.com/) | Airline logos, by two-letter airline code |
 | [OurAirports](https://ourairports.com/) | The airport list, downloaded once a month: codes, names, locations, size, whether each has airline service, and the town, state or region and country it serves |
 | [Esri](https://www.esri.com/) | Satellite imagery behind every map and the optional road overlay |

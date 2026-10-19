@@ -1,7 +1,5 @@
 import csv
-import gzip
 import io
-import json
 import math
 import os
 import re
@@ -20,7 +18,8 @@ FEED_URLS = [  # adsb.fi first: adsb.lol is often overloaded
     "https://opendata.adsb.fi/api/v2/lat/{lat}/lon/{lon}/dist/{dist}",
     "https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{dist}",
 ]
-TRACE_URL = "https://adsb.lol/data/traces/{folder}/trace_full_{hex}.json"  # adsb.fi has no flight-path API
+OPENSKY_TRACK_URL = "https://opensky-network.org/api/tracks/all?icao24={hex}&time=0"  # adsb.fi and adsb.lol block scripts
+OPENSKY_TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 AIRPORTS_URL = "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/airports.csv"
 AIRPORTS_FILE = os.path.join(ROOT, "airports.csv")
 TILE_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
@@ -145,58 +144,92 @@ def parse_plane(ac, now, center=None):
     }
 
 
-feed_problems = {}
+SOURCES = {  # name: (backup, or None; what's lost while it's down and its backup is too)
+    "adsb.fi": ("adsb.lol", "no live aircraft"),
+    "adsb.lol": ("adsb.fi", "no live aircraft"),
+    "OpenSky": (None, "no new flight paths, so no new routes"),
+    "OpenSky login": (None, "using OpenSky without an account (lower daily limit)"),
+    "adsb.lol routes": (None, "only flights whose adsbdb route matches can be shown"),
+    "adsbdb": (None, "no new routes or airline names"),
+    "Aviasales logos": (None, "no new airline logos"),
+    "Esri map tiles": (None, "parts of the map are blank"),
+}
+FEED_NAMES = {"opendata.adsb.fi": "adsb.fi", "api.adsb.lol": "adsb.lol"}
+source_problems = {}  # name -> (what's wrong, when it last failed), for the sources down right now
 paused_until = {}
 
 
-def feed_failed(host, problem):
-    if feed_problems.get(host) != problem:
-        print(f"Feed {host} failed: {problem}")
-    feed_problems[host] = problem
+class SourceProblem(Exception):
+    """A source answered, but not with what was asked for. The message is what gets printed."""
+
+
+class NoData(Exception):
+    """A source is working, but has nothing for this request (like a flight path for one aircraft)."""
+
+
+def http_error(resp):
+    return SourceProblem(f"HTTP {resp.status_code} error")
+
+
+def describe(e):
+    return "can't connect" if isinstance(e, requests.RequestException) else str(e) if isinstance(e, SourceProblem) else "bad data"
+
+
+def source_failed(name, e):
+    """One short line when a source goes down, saying what takes over; quiet while it stays down, even if its problem
+    changes (a slow server can alternate between timing out and answering badly)."""
+    problem, now = describe(e), time.time()
+    if name not in source_problems:
+        backup, lost = SOURCES[name]
+        # a backup that hasn't failed in the last minute counts as working: it may not have been asked since
+        backup_down = backup and now - source_problems.get(backup, ("", 0))[1] < 60
+        then = f"{backup} is also down: {lost}" if backup_down else f"using {backup}" if backup else lost
+        print(f"[{name}] {problem}, {then}")
+    source_problems[name] = (problem, now)
+
+
+def source_ok(name):
+    if source_problems.pop(name, None):
+        print(f"[{name}] working again")
 
 
 def get_politely(session, url, timeout=None, method="GET", **kwargs):
-    """None while the server is skipped: for a minute after it times out or refuses, or as long as a 429 asks."""
+    """None while the server is skipped: for 20 s after it times out or refuses, or as long as a 429 asks."""
     host = url.split("/")[2]
     if time.time() < paused_until.get(host, 0):
         return None
     try:
         resp = session.request(method, url, timeout=(2, timeout or app.TIMEOUT_SECONDS), **kwargs)
     except (requests.ConnectionError, requests.Timeout):
-        paused_until[host] = time.time() + 60
+        paused_until[host] = time.time() + 20
         raise
     if resp.status_code == 429:
-        wait = resp.headers.get("Retry-After", "")
+        wait = resp.headers.get("Retry-After") or resp.headers.get("X-Rate-Limit-Retry-After-Seconds", "")  # OpenSky's
         wait = int(wait) if wait.isdigit() else 120
         paused_until[host] = time.time() + wait
-        feed_failed(host, f"rate limited (HTTP 429), pausing requests to it for {wait}s")
-        return None
+        raise SourceProblem(f"rate limited for {wait} s")
     return resp
 
 
 def feed_get(session, urls, **fmt):
-    for url in sorted(urls, key=lambda u: u.split("/")[2] in feed_problems):
-        host = url.split("/")[2]
+    for url in sorted(urls, key=lambda u: FEED_NAMES[u.split("/")[2]] in source_problems):
+        name = FEED_NAMES[url.split("/")[2]]
         try:
             resp = get_politely(session, url.format(**fmt))
-        except requests.RequestException as e:
-            feed_failed(host, str(e))
-            continue
-        if resp is None:
-            continue
-        try:
+            if resp is None:
+                continue
+            if resp.status_code != 200:
+                raise http_error(resp)
             body = resp.json()
-        except ValueError:
-            feed_failed(host, f"HTTP {resp.status_code}, not JSON: {resp.text[:100]!r}")
+            found = body.get("ac", body.get("aircraft"))
+            if not isinstance(found, list):
+                raise ValueError("no aircraft list")
+        except Exception as e:
+            source_failed(name, e)
             continue
-        found = body.get("ac", body.get("aircraft")) if isinstance(body, dict) else None
-        if not isinstance(found, list):
-            feed_failed(host, f"HTTP {resp.status_code}, no aircraft list in the response")
-            continue
-        if feed_problems.pop(host, None):
-            print(f"Feed {host} is working again")
+        source_ok(name)
         return found
-    raise ConnectionError("no flight feed responded")
+    raise ConnectionError("no flight feed responded")  # already reported by source_failed
 
 
 def fetch_aircraft(session, radius_miles, center=None):
@@ -225,22 +258,25 @@ def load_airports(session):
         try:
             print("Downloading airports.csv (first run, or monthly update)...")
             resp = session.get(AIRPORTS_URL, timeout=60)
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                raise http_error(resp)
             data = resp.content
             try:
                 with open(AIRPORTS_FILE, "wb") as fh:
                     fh.write(data)
             except OSError as e:
-                print(f"Couldn't save {AIRPORTS_FILE} ({e}); it will be downloaded again next start")
+                print(f"Couldn't save {AIRPORTS_FILE} ({e.strerror}); it will be downloaded again next start")
         except Exception as e:
-            print(f"Couldn't download airports.csv ({e})" + ("; using the older copy" if exists else ""))
-    try:
-        if data is None:
+            print(f"[OurAirports] {describe(e)}, " + ("using the saved airports.csv" if exists
+                                                      else "no airport list: no takeoff airports, so no routes"))
+    if data is None:
+        try:
             with open(AIRPORTS_FILE, "rb") as fh:
                 data = fh.read()
-    except OSError:
-        print("No airport list: no takeoff airports can be found, so no routes will be shown")
-        return
+        except OSError as e:
+            if exists:
+                print(f"Couldn't read {AIRPORTS_FILE} ({e.strerror}): no takeoff airports, so no routes")
+            return
     ALL_AIRPORTS[:] = [renamed({"code": r["iata_code"] or r["icao_code"] or r["ident"], "icao": r["icao_code"] or r["ident"],
                                 "city": r["municipality"] or r["name"], "type": r["type"], "airline": r["scheduled_service"] == "yes",
                                 "pos": (float(r["latitude_deg"]), float(r["longitude_deg"]))})
@@ -277,26 +313,59 @@ takeoff_cache = {}  # icao24 -> (time checked, takeoff airport or None)
 departure_cache = {}  # icao24 -> wheels-up time
 
 
+opensky_token = {"value": None, "expires": 0, "retry": 0}
+
+
+def opensky_headers(session):
+    """The login header when .env has OpenSky API credentials (10x the daily limit), with the token renewed before it
+    expires; {} to use OpenSky without an account, also for 10 minutes after a failed login."""
+    client_id, secret = os.environ.get("OPENSKY_CLIENT_ID"), os.environ.get("OPENSKY_CLIENT_SECRET")
+    now = time.time()
+    if not client_id or not secret:
+        return {}
+    if now > opensky_token["expires"] - 300 and now > opensky_token["retry"]:
+        try:
+            resp = get_politely(session, OPENSKY_TOKEN_URL, method="POST", data={
+                "grant_type": "client_credentials", "client_id": client_id, "client_secret": secret})
+            if resp is not None:
+                if resp.status_code != 200:
+                    raise http_error(resp)
+                body = resp.json()
+                opensky_token.update(value=body["access_token"], expires=now + body["expires_in"])
+                source_ok("OpenSky login")
+        except Exception as e:
+            source_failed("OpenSky login", e)
+            opensky_token.update(value=None, expires=0, retry=now + 600)
+    return {"Authorization": "Bearer " + opensky_token["value"]} if opensky_token["value"] else {}
+
+
+def opensky_trace(session, icao24):
+    """The aircraft's current flight as [(lat, lon, time, feet or "ground")], or None while the server is skipped.
+    OpenSky sends a point mainly at each turn, so long gaps between points are normal."""
+    resp = get_politely(session, OPENSKY_TRACK_URL.format(hex=icao24), headers=opensky_headers(session))
+    if resp is None:
+        return None
+    if resp.status_code == 401:
+        opensky_token["expires"] = 0  # the token was refused: log in again next time
+    if resp.status_code == 404:
+        raise NoData
+    if resp.status_code != 200:
+        raise http_error(resp)
+    return [(lat, lon, t, "ground" if ground else alt / 0.3048 if alt is not None else None)
+            for t, lat, lon, alt, _track, ground in resp.json()["path"] if lat is not None and lon is not None]
+
+
 def fetch_trace(session, icao24, trim_far=True, center=None):
     """Also records the takeoff airport and time, which is what confirms routes."""
     try:
-        resp = get_politely(session, TRACE_URL.format(folder=icao24[-2:], hex=icao24))
-        if resp is None:
-            return []  # the server is being skipped: tried again after, not marked as unavailable
-        data = resp.content
-        body = json.loads(gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data)
-        start, rows = body["timestamp"], body["trace"]
+        pts = opensky_trace(session, icao24)
     except Exception as e:
-        feed_failed(TRACE_URL.split("/")[2], f"flight path unavailable ({e})")
+        source_ok("OpenSky") if isinstance(e, NoData) else source_failed("OpenSky", e)
         takeoff_cache[icao24] = (time.time() - 3 * 3600 + 600, None)  # try again in 10 minutes
         return []
-    pts = []
-    for row in rows:
-        t = start + row[0]
-        if pts and ((row[6] or 0) & 2 or t - pts[-1][2] > 1200):
-            pts = []  # a new flight or a 20-minute gap
-        if row[1] is not None and row[2] is not None:
-            pts.append((row[1], row[2], t, row[3]))
+    if pts is None:
+        return []  # the server is being skipped: tried again after, not marked as unavailable
+    source_ok("OpenSky")
     first_alt = pts[0][3] if pts else None
     took_off = first_alt == "ground" or (isinstance(first_alt, (int, float)) and first_alt < 2500)
     takeoff_cache[icao24] = (time.time(), nearest_airport(pts[0][:2], TAKEOFF_AIRPORT_MILES) if took_off else None)
@@ -409,11 +478,14 @@ def get_tile(session, url, z, x, y, alpha=False):
         return None
     try:
         resp = get_politely(session, url.format(z=z, x=x, y=y))
-        if resp is not None and resp.status_code == 200:
+        if resp is not None and resp.status_code != 404:
+            if resp.status_code != 200:
+                raise http_error(resp)
             img = pygame.image.load(io.BytesIO(resp.content))
+            source_ok("Esri map tiles")
             return img.convert_alpha() if alpha else img.convert()
-    except Exception:
-        pass
+    except Exception as e:
+        source_failed("Esri map tiles", e)
     missing_tiles = True
     return None
 
@@ -646,8 +718,8 @@ class MapMode:
             self.radar_pick = self.find_radar_pick(fetched)
             radar.update_lookups(session, planes)
             self.planes = planes
-        except ConnectionError as e:
-            print(e)
+        except ConnectionError:
+            pass  # each feed already said what's wrong
 
     def find_radar_pick(self, fetched):
         """The flight radar mode would show: the nearest qualifying one to the radar center. On a moved map it's

@@ -283,9 +283,7 @@ def draw_hover(low, mode, point):
         draw_text_outlined(low, text, tx, ty, COLOR_CALLSIGN)
 
 
-USAGE = f"""usage: python src/aerobit.py [radar | map | clock | track FLIGHT] [r=RADIUS] [airports=true|false] [airfields=true|false]
-                           [num_flights=N] [heli_only=true|false] [roads=true|false]
-                           [set_coords=LAT,LON] [recenter [set|default]] [clock set TIME | clock cancel]
+USAGE = f"""usage: python src/aerobit.py [radar | map | clock | track FLIGHT] [options]
   radar      (the default) nearest airline flight with a confirmed route
   map        every plane and helicopter nearby, full screen
   clock      the time and date at the .env location, with a dot for each aircraft on the default map
@@ -304,9 +302,25 @@ USAGE = f"""usage: python src/aerobit.py [radar | map | clock | track FLIGHT] [r
              (default: CENTER_COORDS from .env; tracking mode always uses .env)
   recenter, recenter set  radar and map: back to the last set_coords center (or .env), undoing a clicked map center
   recenter default        radar and map: back to the .env center, undoing set_coords too
-While running: press Enter in the display (or type in this terminal) to give a new command; R = radar, M = map,
-C = clock, T = track the blue flight (radar and map mode).
+
+While running: press Enter in the display (or type in this terminal) to give a new command;
+R = radar, M = map, C = clock, T = track the blue flight (radar and map mode).
 A command naming a mode starts it fresh; options alone (like r=30) change only those in the current mode."""
+
+CREDITS = """AeroBit, by Luca Pishos. MIT License.
+https://github.com/Pqrticle/AeroBit
+
+Data
+  adsb.fi            live aircraft
+  OpenSky Network    flight paths
+  adsbdb             routes, airlines and flight numbers
+  adsb.lol           backup live aircraft and routes
+  Aviasales          airline logos
+  OurAirports        airport list
+  Esri               satellite imagery
+
+Airline names and logos belong to their owners. AeroBit isn't affiliated
+with any airline or data provider."""
 
 OPTION_SETTINGS = ("RADAR_RADIUS_MILES", "MAP_RADIUS_MILES", "TRACK_NO_ROUTE_RADIUS_MILES", "SHOW_AIRPORTS",
                    "MAP_SHOW_AIRFIELDS", "NUM_FLIGHTS", "MAP_NUM_FLIGHTS",
@@ -332,6 +346,8 @@ def parse_command(args, base=None):
         if not has_value:
             if key in ("help", "-h", "--help", "/?"):
                 return "help", settings
+            if key == "credits":  # not listed in help
+                return "credits", settings
             if key in ("recenter", "recenter set", "recenter default"):  # the last set_coords center, or .env
                 settings["CENTER_COORDS"] = HOME_COORDS if key == "recenter default" else CENTER_COORDS
                 continue
@@ -407,7 +423,7 @@ def apply_settings(settings):
 
 
 def run_command(session, text, current):
-    """Returns the new mode, or an error message."""
+    """Returns the new mode, an error message, or None to keep the current mode."""
     words = text.split()
     for i, w in enumerate(words):
         if w.lower().endswith(".py"):
@@ -423,8 +439,9 @@ def run_command(session, text, current):
                 center = current.center  # options alone keep a map moved by clicking
     except ValueError as e:
         return str(e)
-    if mode == "help":
-        return "RADAR/MAP/CLOCK/TRACK R= ROADS= NUM_FLIGHTS="
+    if mode in ("help", "credits"):
+        print("\n" + (USAGE if mode == "help" else CREDITS))
+        return None  # the current mode keeps running
     if "recenter" in (w.lower() for w in words) and mode not in ("radar", "map"):
         return "recenter only works in radar and map"
     apply_settings(settings)
@@ -592,6 +609,8 @@ def main(mode="radar"):
                 if not text:
                     continue
                 result = run_command(session, text, current)
+            if result is None:
+                continue
             if isinstance(result, str):
                 print(result)
                 message, message_until = result, time.time() + 6
@@ -641,6 +660,8 @@ if __name__ == "__main__":
     except ValueError as e:
         sys.exit(f"{e}.\n\n{USAGE}")
     if start_mode == "help":
-        sys.exit(USAGE)
+        sys.exit("\n" + USAGE)
+    if start_mode == "credits":
+        sys.exit("\n" + CREDITS)
     apply_settings(start_settings)
     main(start_mode or "radar")

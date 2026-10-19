@@ -5,9 +5,9 @@ import aerobit as app
 from aerobit import (COLOR_CALLSIGN, COLOR_LABEL, COLOR_OFF, COLOR_TEXT, GRID_W, HOME_COORDS, clean,
                      draw_outlined_icon, draw_text_center)
 from map import (HELICOPTER_DOT, MapView, aircraft_color, current_position, distance_miles, draw_airports,
-                 draw_dotted_path, draw_home, draw_map_base, feed_get, fetch_trace, get_background, get_politely,
+                 draw_dotted_path, draw_home, draw_map_base, feed_get, fetch_trace, get_background,
                  map_icon, nearest_town, parse_plane, plane_box, takeoff_airport)
-from radar import (ADSBDB_URL, PANEL, adsbdb, best_route, draw_info, flight_path, info_cache, look_up_flight,
+from radar import (PANEL, adsbdb, best_route, draw_info, flight_path, info_cache, look_up_flight,
                    lookup_routeset, near_labels, note_trends)
 
 CALLSIGN_URLS = [
@@ -19,16 +19,13 @@ CALLSIGN_URLS = [
 def callsign_options(session, flight):
     flight = clean(flight).replace(" ", "")
     options = [flight]
-    route = (adsbdb(session, "callsign/" + flight) or {}).get("flightroute")
+    response = adsbdb(session, "callsign/" + flight)
+    route = response.get("flightroute") if isinstance(response, dict) else None
     if isinstance(route, dict) and route.get("callsign_icao"):
         options.append(route["callsign_icao"])
     m = re.fullmatch(r"([A-Z0-9]{2})(\d{1,4}[A-Z]?)", flight)
     if m:
-        try:
-            resp = get_politely(session, ADSBDB_URL + "airline/" + m.group(1))
-            airlines = resp.json().get("response") if resp is not None else None
-        except Exception:
-            airlines = None
+        airlines = adsbdb(session, "airline/" + m.group(1))
         if isinstance(airlines, list):
             options += [a["icao"] + m.group(2) for a in airlines if a.get("icao") and a.get("iata") == m.group(1)]
     return list(dict.fromkeys(options))
@@ -127,8 +124,8 @@ class TrackMode:
                 view = tracking_view(self.view, PANEL, p, self.trails[p["icao24"]], time.time())
                 if view is not self.view:
                     self.view, self.background = view, get_background(session, view)
-        except ConnectionError as e:
-            print(e)
+        except ConnectionError:
+            pass  # each feed already said what's wrong
 
     def hoverable(self):
         return [self.selected] if self.selected else []
